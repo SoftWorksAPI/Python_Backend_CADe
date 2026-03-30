@@ -1,0 +1,4 @@
+Precisa instalar o ODA file converter pra converter de dwg (fechado) para exf (aberto):
+
+Precisa instalar a extensão ezdxf:
+    pip install ezdxf shapely

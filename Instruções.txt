@@ -1,0 +1,4 @@
+Precisa instalar o ODA file converter pra converter de dwg (fechado) para exf (aberto):
+
+Precisa instalar as seguintes extensões:
+    pip install ezdxf pandas openpyxl shapely tqdm networkx scipy

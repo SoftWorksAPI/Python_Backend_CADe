@@ -74,6 +74,12 @@ async def extract_dxf_content(
         
         relatorio = await generate_ai_report(ai_prompt)
         
+        print("\n" + "="*80)
+        print(f"📄 RELATÓRIO GERADO - {file.filename}")
+        print("="*80)
+        print(relatorio)
+        print("="*80 + "\n")
+        
         return AIReportResponse(
             arquivo=file.filename,
             relatorio=relatorio,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from google import genai
+import json
 import os
 import re
 from collections import defaultdict
@@ -18,10 +20,92 @@ from src.api.v1.schemas.dxf_schemas import (
     SummaryItem,
     TextItem,
 )
+from src.config import GEMINI_API_KEY
 
 
 class DXFExtractionError(Exception):
     """Raised when the uploaded DXF cannot be processed."""
+
+
+def _generate_ai_prompt_string(response: DXFExtractResponse) -> str:
+    """
+    Gera um prompt completo como uma string única contendo instruções e JSON.
+    
+    Args:
+        response: A resposta da extração DXF
+        
+    Returns:
+        String contendo o prompt completo formatado
+    """
+    
+    json_data = json.dumps(
+        response.model_dump(),
+        indent=2,
+        ensure_ascii=False,
+        default=str
+    )
+    
+    prompt_string = f"""Você é um assistente especializado em análise de projetos arquitetônicos e de engenharia baseados em arquivos DXF.
+
+OBJETIVO:
+Gere um relatório profissional e detalhado com base nos dados de extração do arquivo DXF fornecido abaixo.
+
+O relatório DEVE conter as seguintes seções:
+1. RESUMO EXECUTIVO: Visão geral do projeto, arquivo analisado e quantidade total de entidades
+2. ANÁLISE DE ELEMENTOS: Detalhamento de linhas, polylines e áreas por disciplina (ESTRUTURAL, ELETRICO, HIDROSSANITARIO, PORTA, JANELA, ARQUITETONICO)
+3. ANÁLISE DE BLOCOS: Identificação de blocos/símbolos, circuitos, cabos e cargas especificadas
+4. ANÁLISE DE TEXTOS: Textos encontrados no desenho, organizados por disciplina e layer
+5. ANÁLISE DE AMBIENTES: Áreas e perímetros dos ambientes identificados, com análise de funcionalidade
+6. RECOMENDAÇÕES: Sugestões baseadas nos dados encontrados, alertando sobre inconsistências
+
+INSTRUÇÕES DE FORMATAÇÃO:
+- Use Markdown com seções bem hierarquizadas
+- Crie tabelas para dados tabulares quando apropriado
+- Use linguagem profissional adequada para stakeholders
+- Destaque alertas sobre possíveis inconsistências nos dados
+- Inclua análises quantitativas e insights valiosos
+
+CONTEXTO DE DISCIPLINAS:
+- ESTRUTURAL: Pilares, vigas, elementos de estrutura
+- ELETRICO: Circuitos, fiação, componentes elétricos
+- HIDROSSANITARIO: Tubulações, peças de água e esgoto
+- PORTA: Elementos de acesso
+- JANELA: Aberturas e vãos
+- ARQUITETONICO: Elementos gerais de arquitetura
+
+DADOS DO ARQUIVO DXF (JSON):
+{json_data}
+
+Gere agora um relatório profissional, completo e bem estruturado baseado nesses dados."""
+
+    return prompt_string
+
+
+async def generate_ai_report(prompt: str) -> str:
+    """
+    Gera um relatório usando IA com base no prompt fornecido.
+    
+    Esta função aciona uma chamada à API de IA com o prompt completo
+    contendo instruções e dados extraídos do DXF, retornando um relatório
+    profissional e estruturado.
+    
+    Args:
+        prompt: String contendo o prompt completo com instruções, contexto e dados JSON
+        
+    Returns:
+        String contendo a resposta da IA com o relatório gerado em Markdown
+        
+    Raises:
+        Exception: Se houver erro na chamada à API da IA
+    """
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    response = client.models.generate_content(
+        model="gemini-3-flash-preview", contents=prompt
+    )
+    print(response.text)
+
+    return response.text
 
 
 def _classificar(layer: str, texto: str = "") -> str:

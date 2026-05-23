@@ -18,6 +18,8 @@ from src.api.v1.services.ai.prompts import SYSTEM_PROMPT_AUDITOR, build_user_pro
 from src.api.v1.schemas.dxf_schemas import DXFExtractRequest, DXFExtractResponse
 from src.api.v1.services.extract_dxf_service import extract_dxf_from_upload
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
+from src.api.v1.services.report.markdown_generator import gerar_markdown
+from src.api.v1.services.report.pdf_generator import gerar_pdf
 
 
 def _node_extraction(
@@ -147,15 +149,34 @@ def _node_assembly(
     dados_extracao: DXFExtractResponse,
     raw_llm_response: str,
 ) -> dict[str, Any]:
-    """No 4: Monta o resultado final com metadados."""
+    """No 4: Monta o resultado final com metadados e gera relatorios."""
+    dados_dict = dados_extracao.model_dump(mode="json")
+    arquivo = dados_extracao.arquivo
+
+    # Gerar relatorios (silencioso se falhar)
+    relatorio_md = None
+    relatorio_pdf = None
+
+    try:
+        relatorio_md = gerar_markdown(memorial, dados_dict, arquivo)
+    except Exception:
+        pass
+
+    try:
+        relatorio_pdf = gerar_pdf(memorial, dados_dict, arquivo)
+    except Exception:
+        pass
+
     return {
         "sucesso": True,
         "memorial_descritivo": memorial,
-        "dados_extracao": dados_extracao.model_dump(mode="json"),
+        "dados_extracao": dados_dict,
         "confianca": memorial.get("confianca_analise", "media"),
         "num_inconsistencias": len(
             memorial.get("inconsistencias_detectadas", [])
         ),
+        "relatorio_md": relatorio_md,
+        "relatorio_pdf": relatorio_pdf,
     }
 
 

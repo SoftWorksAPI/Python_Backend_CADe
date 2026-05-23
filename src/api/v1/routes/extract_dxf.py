@@ -36,6 +36,8 @@ class MemorialResponse(BaseModel):
     dados_extracao: dict[str, Any] | None = None
     confianca: str | None = None
     num_inconsistencias: int | None = None
+    relatorio_md: str | None = None
+    relatorio_pdf: str | None = None
     erro: str | None = None
 
 
@@ -105,6 +107,8 @@ async def extract_dxf_memorial(
             dados_extracao=resultado.get("dados_extracao"),
             confianca=resultado.get("confianca"),
             num_inconsistencias=resultado.get("num_inconsistencias"),
+            relatorio_md=resultado.get("relatorio_md"),
+            relatorio_pdf=resultado.get("relatorio_pdf"),
             erro=resultado.get("erro"),
         )
     except DXFExtractionError as exc:

@@ -16,3 +16,15 @@ venv
 pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/venv
+
+### Python ###
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+### Env ###
+.env

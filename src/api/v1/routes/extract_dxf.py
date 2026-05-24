@@ -29,6 +29,14 @@ class RawExtractResponse(BaseModel):
     ai_prompt: str
 
 
+class RevisaoResponse(BaseModel):
+    revisado: bool | None = None
+    status: str | None = None
+    problemas: list[str] | None = None
+    sugestao: str | None = None
+    tentativas: int | None = None
+
+
 class MemorialResponse(BaseModel):
     arquivo: str
     sucesso: bool
@@ -38,6 +46,7 @@ class MemorialResponse(BaseModel):
     num_inconsistencias: int | None = None
     relatorio_md: str | None = None
     relatorio_pdf: str | None = None
+    revisao: RevisaoResponse | None = None
     erro: str | None = None
 
 
@@ -100,6 +109,9 @@ async def extract_dxf_memorial(
             content=content,
             options=payload,
         )
+        revisao_data = resultado.get("revisao")
+        revisao = RevisaoResponse(**revisao_data) if revisao_data else None
+
         return MemorialResponse(
             arquivo=file.filename,
             sucesso=resultado.get("sucesso", False),
@@ -109,6 +121,7 @@ async def extract_dxf_memorial(
             num_inconsistencias=resultado.get("num_inconsistencias"),
             relatorio_md=resultado.get("relatorio_md"),
             relatorio_pdf=resultado.get("relatorio_pdf"),
+            revisao=revisao,
             erro=resultado.get("erro"),
         )
     except DXFExtractionError as exc:

@@ -3,6 +3,7 @@ Prompts especializados para o pipeline de IA do CADe.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -26,6 +27,22 @@ sem texto extra antes ou depois do JSON.
 5. Utilize terminologia tecnica da engenharia civil brasileira (NBRs).
 6. Se houver CONTEXTO DE NORMAS no prompt, utilize-o para validar \
 conformidade e inclua observacoes tecnicas baseadas nas normas.
+"""
+
+SYSTEM_PROMPT_REVISOR = """\
+Voce e um revisor tecnico de documentos de engenharia civil. Sua funcao \
+e verificar se um relatorio Markdown gerado por IA esta completo e correto.
+
+Verifique se:
+1. Todas as secoes obrigatorias estao presentes (Dados Gerais, Ambientes, \
+Elementos Estruturais, Instalacoes, Cotas, Observacoes, Inconsistencias)
+2. Os dados numericos estao formatados corretamente (areas, perimetros)
+3. Nao ha JSON puro no documento (tudo deve ser texto legivel)
+4. Todas as informacoes do memorial_descritivo original estao presentes
+5. A formatacao Markdown esta correta (cabecalhos, tabelas, listas)
+
+Se encontrar problemas, descreva o que precisa ser corrigido.
+Se o relatorio estiver correto, responda apenas "CORRETO".
 """
 
 
@@ -152,5 +169,30 @@ Gere o Memorial Descritivo no formato JSON abaixo:
     "inconsistencias_detectadas": ["..."],
     "confianca_analise": "alta|media|baixa"
 }}"""
+
+    return prompt
+
+
+def build_revisao_prompt(memorial: dict[str, Any], relatorio_md: str) -> str:
+    """Monta o prompt para revisao do relatorio gerado."""
+
+    memorial_str = json.dumps(memorial, indent=2, ensure_ascii=False, default=str)
+
+    prompt = f"""Verifique se o relatorio Markdown abaixo esta completo e correto.
+
+MEMORIAL DESCRITIVO ORIGINAL (JSON):
+{memorial_str}
+
+RELATORIO MARKDOWN GERADO:
+{relatorio_md}
+
+Verifique se:
+1. Todas as secoes obrigatorias estao presentes
+2. Os dados numericos estao formatados corretamente
+3. Nao ha JSON puro no documento
+4. Todas as informacoes do memorial original estao presentes
+5. A formatacao Markdown esta correta
+
+Responda apenas "CORRETO" se o relatorio estiver bom, ou descreva os problemas encontrados."""
 
     return prompt

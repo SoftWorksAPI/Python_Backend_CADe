@@ -1,20 +1,26 @@
 """
 Pipeline de IA para geracao de Memorial Descritivo.
 
-4 nos (etapas):
+5 nos (etapas):
   1. Extracao deterministica (ezdxf)
+  1.5. Busca RAG (ChromaDB)
   2. Analise via LLM (OpenRouter)
   3. Parse e validacao da resposta
-  4. Montagem do resultado final
+  4. Montagem + geracao de relatorios
+  5. Revisao do relatorio pela IA
 """
 from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from src.api.v1.services.ai.client import chamar_openrouter
-from src.api.v1.services.ai.prompts import SYSTEM_PROMPT_AUDITOR, build_user_prompt
+from src.api.v1.services.ai.prompts import (
+    SYSTEM_PROMPT_AUDITOR,
+    build_user_prompt,
+)
 from src.api.v1.schemas.dxf_schemas import DXFExtractRequest, DXFExtractResponse
 from src.api.v1.services.extract_dxf_service import extract_dxf_from_upload
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
@@ -22,12 +28,16 @@ from src.api.v1.services.report.markdown_generator import gerar_markdown
 from src.api.v1.services.report.pdf_generator import gerar_pdf
 
 
+# ---------------------------------------------------------------------------
+# No 1 - Extracao deterministica
+# ---------------------------------------------------------------------------
+
 def _node_extraction(
     filename: str,
     content: bytes,
     options: DXFExtractRequest,
 ) -> DXFExtractResponse:
-    """No 1: Extrai dados brutos do DXF usando ezdxf (sem IA)."""
+    """Extrai dados brutos do DXF usando ezdxf (sem IA)."""
     return extract_dxf_from_upload(
         filename=filename,
         content=content,
@@ -35,14 +45,16 @@ def _node_extraction(
     )
 
 
+# ---------------------------------------------------------------------------
+# No 1.5 - Construir query RAG
+# ---------------------------------------------------------------------------
+
 def _build_rag_query(dados: DXFExtractResponse) -> str:
     """
     Monta uma query de busca inteligente baseada nos dados extraidos do DXF.
-    Coleta textos, disciplinas e nomes de layers para buscar normas relevantes.
     """
     termos: list[str] = []
 
-    # Disciplinas detectadas
     disciplinas = set()
     for el in dados.elementos:
         if el.disciplina and el.disciplina != "ARQUITETONICO":
@@ -54,7 +66,6 @@ def _build_rag_query(dados: DXFExtractResponse) -> str:
         if txt.disciplina and txt.disciplina != "ARQUITETONICO":
             disciplinas.add(txt.disciplina.lower())
 
-    # Textos do desenho (primeiros 10, limpos)
     textos_unicos: list[str] = []
     seen = set()
     for t in dados.textos:
@@ -65,7 +76,6 @@ def _build_rag_query(dados: DXFExtractResponse) -> str:
         if len(textos_unicos) >= 10:
             break
 
-    # Layers unicos (primeiros 5)
     layers_unicos: list[str] = []
     seen_layers: set[str] = set()
     for el in dados.elementos:
@@ -75,7 +85,6 @@ def _build_rag_query(dados: DXFExtractResponse) -> str:
         if len(layers_unicos) >= 5:
             break
 
-    # Montar query
     if disciplinas:
         termos.append(" ".join(sorted(disciplinas)))
     if textos_unicos:
@@ -85,18 +94,21 @@ def _build_rag_query(dados: DXFExtractResponse) -> str:
 
     query = " ".join(termos).strip()
 
-    # Fallback se nao extraiu nada relevante
     if not query or len(query) < 10:
         query = f"normas tecnicas construcao civil {dados.arquivo}"
 
-    return query[:500]  # Limitar tamanho da query
+    return query[:500]
 
+
+# ---------------------------------------------------------------------------
+# No 2 - Analise via LLM
+# ---------------------------------------------------------------------------
 
 def _node_llm_analysis(
     dados_extracao: DXFExtractResponse,
     normas_contexto: str = "",
 ) -> str:
-    """No 2: Envia os dados extraidos ao LLM via OpenRouter."""
+    """Envia os dados extraidos ao LLM via OpenRouter."""
     dados_dict = dados_extracao.model_dump(mode="json")
     user_prompt = build_user_prompt(dados_dict, normas_contexto)
 
@@ -106,8 +118,12 @@ def _node_llm_analysis(
     )
 
 
+# ---------------------------------------------------------------------------
+# No 3 - Parse e validacao
+# ---------------------------------------------------------------------------
+
 def _node_parse_response(raw_text: str) -> dict[str, Any]:
-    """No 3: Tenta parsear o JSON retornado pelo LLM com fallback."""
+    """Tenta parsear o JSON retornado pelo LLM com fallback."""
     try:
         return json.loads(raw_text)
     except json.JSONDecodeError:
@@ -135,6 +151,7 @@ def _node_parse_response(raw_text: str) -> dict[str, Any]:
         "ambientes": [],
         "elementos_estruturais": {},
         "instalacoes": {},
+        "cotas_anotacoes": {},
         "observacoes_tecnicas": [],
         "inconsistencias_detectadas": [
             "Nao foi possivel parsear a resposta do LLM como JSON."
@@ -144,16 +161,19 @@ def _node_parse_response(raw_text: str) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# No 4 - Montagem + geracao de relatorios
+# ---------------------------------------------------------------------------
+
 def _node_assembly(
     memorial: dict[str, Any],
     dados_extracao: DXFExtractResponse,
     raw_llm_response: str,
 ) -> dict[str, Any]:
-    """No 4: Monta o resultado final com metadados e gera relatorios."""
+    """Monta o resultado final e gera relatorios."""
     dados_dict = dados_extracao.model_dump(mode="json")
     arquivo = dados_extracao.arquivo
 
-    # Gerar relatorios (silencioso se falhar)
     relatorio_md = None
     relatorio_pdf = None
 
@@ -180,13 +200,111 @@ def _node_assembly(
     }
 
 
+# ---------------------------------------------------------------------------
+# No 5 - Revisao do relatorio pela IA
+# ---------------------------------------------------------------------------
+
+def _node_review(
+    memorial: dict[str, Any],
+    relatorio_md_path: str | None,
+) -> dict[str, Any]:
+    """
+    Envia o relatorio gerado para o LLM revisar.
+    Retorna o resultado da revisao.
+    """
+    if not relatorio_md_path:
+        return {"revisado": False, "motivo": "Relatorio MD nao foi gerado."}
+
+    try:
+        from pathlib import Path
+        conteudo_md = Path(relatorio_md_path).read_text(encoding="utf-8")
+    except Exception as e:
+        return {"revisado": False, "motivo": f"Erro ao ler relatorio: {e}"}
+
+    # Verificar se ha JSON puro no documento
+    json_patterns = [
+        r'\{[^{}]*"dados_gerais"[^{}]*\}',
+        r'\{[^{}]*"nome_obra"[^{}]*\}',
+        r'\[[\s\S]*?\{[\s\S]*?"area_m2"[\s\S]*?\}[\s\S]*?\]',
+    ]
+    json_encontrado = []
+    for pattern in json_patterns:
+        matches = re.findall(pattern, conteudo_md)
+        json_encontrado.extend(matches)
+
+    if json_encontrado:
+        return {
+            "revisado": True,
+            "status": "PROBLEMAS_ENCONTRADOS",
+            "problemas": [f"JSON puro encontrado no documento ({len(json_encontrado)} ocorrencias)"],
+            "sugestao": "Regenerar relatorio sem dados JSON crus.",
+        }
+
+    # Verificar se secoes obrigatorias existem
+    secoes_obrigatorias = [
+        "Dados Gerais",
+        "Ambientes",
+        "Elementos Estruturais",
+        "Instalacoes",
+        "Observacoes",
+        "Inconsistencias",
+    ]
+
+    secoes_faltando = []
+    for secao in secoes_obrigatorias:
+        if secao.lower() not in conteudo_md.lower():
+            secoes_faltando.append(secao)
+
+    if secoes_faltando:
+        return {
+            "revisado": True,
+            "status": "PROBLEMAS_ENCONTRADOS",
+            "problemas": [f"Secoes faltando: {', '.join(secoes_faltando)}"],
+            "sugestao": "Adicionar secoes faltantes ao relatorio.",
+        }
+
+    # Verificar se dados do memorial estao presentes
+    dados_verificar = []
+    dg = memorial.get("dados_gerais", {})
+    if dg.get("nome_obra") and dg["nome_obra"] not in conteudo_md:
+        dados_verificar.append(f"nome_obra '{dg['nome_obra']}' nao encontrado")
+    if dg.get("localizacao") and dg["localizacao"] not in conteudo_md:
+        dados_verificar.append(f"localizacao '{dg['localizacao']}' nao encontrada")
+
+    ambientes = memorial.get("ambientes", [])
+    for a in ambientes[:3]:
+        nome = a.get("nome", "")
+        if nome and nome not in conteudo_md:
+            dados_verificar.append(f"ambiente '{nome}' nao encontrado")
+
+    if dados_verificar:
+        return {
+            "revisado": True,
+            "status": "DADOS_FALTANDO",
+            "problemas": dados_verificar,
+            "sugestao": "Verificar se todos os dados do memorial estao no relatorio.",
+        }
+
+    return {
+        "revisado": True,
+        "status": "CORRETO",
+        "problemas": [],
+        "sugestao": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline principal
+# ---------------------------------------------------------------------------
+
 def executar_pipeline_memorial(
     filename: str,
     content: bytes,
     options: DXFExtractRequest,
 ) -> dict[str, Any]:
     """
-    Executa o pipeline completo: Extracao -> RAG -> LLM -> Parse -> Montagem.
+    Executa o pipeline completo:
+    Extracao -> RAG -> LLM -> Parse -> Montagem -> Revisao
     """
     try:
         # No 1: Extracao deterministica
@@ -200,22 +318,63 @@ def executar_pipeline_memorial(
                 "dados_extracao": dados.model_dump(mode="json"),
             }
 
-        # No 1.5: Buscar normas relevantes no RAG baseado nos dados extraidos
+        # No 1.5: Buscar normas relevantes no RAG
         normas_contexto = ""
         try:
             query = _build_rag_query(dados)
             normas_contexto = buscar_normas_relevantes(query=query, k=5)
         except Exception:
-            pass  # RAG opcional
+            pass
 
-        # No 2: Analise via LLM com contexto de normas
+        # No 2: Analise via LLM
         raw_response = _node_llm_analysis(dados, normas_contexto)
 
         # No 3: Parse da resposta
         memorial = _node_parse_response(raw_response)
 
-        # No 4: Montagem do resultado
-        return _node_assembly(memorial, dados, raw_response)
+        # No 4: Montagem + relatorios
+        resultado = _node_assembly(memorial, dados, raw_response)
+
+        # No 5: Revisao do relatorio (max 3 tentativas)
+        MAX_TENTATIVAS = 3
+        revisao = None
+
+        for tentativa in range(MAX_TENTATIVAS):
+            revisao = _node_review(memorial, resultado.get("relatorio_md"))
+
+            if revisao.get("status") == "CORRETO":
+                break
+
+            # Se nao eh a ultima tentativa, regenerar
+            if tentativa < MAX_TENTATIVAS - 1:
+                try:
+                    # Deletar arquivos antigos antes de regenerar
+                    antigo_md = resultado.get("relatorio_md")
+                    antigo_pdf = resultado.get("relatorio_pdf")
+                    if antigo_md:
+                        Path(antigo_md).unlink(missing_ok=True)
+                    if antigo_pdf:
+                        Path(antigo_pdf).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+                try:
+                    resultado["relatorio_md"] = gerar_markdown(
+                        memorial, resultado.get("dados_extracao"), dados.arquivo
+                    )
+                    resultado["relatorio_pdf"] = gerar_pdf(
+                        memorial, resultado.get("dados_extracao"), dados.arquivo
+                    )
+                except Exception:
+                    break
+            else:
+                # Ultima tentativa — marcar como parcial
+                revisao["status"] = "PARCIAL"
+
+        revisao["tentativas"] = tentativa + 1
+        resultado["revisao"] = revisao
+
+        return resultado
 
     except Exception as e:
         return {

@@ -19,6 +19,8 @@ pip-selfcheck.json
 
 ### Python ###
 __pycache__/
+chroma_db/
+src/api/v1/services/report/output/
 *.py[cod]
 *.pyo
 *.egg-info/

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class DXFExtractRequest(BaseModel):
+    file_id: int | None = Field(default=None, description="ID do arquivo no Node.js")
     min_environment_area: float = Field(default=1.0, ge=0)
     include_elements: bool = True
     include_blocks: bool = True
@@ -16,6 +17,7 @@ class DXFExtractRequest(BaseModel):
     @classmethod
     def as_form(
         cls,
+        file_id: Annotated[int | None, Form()] = None,
         min_environment_area: Annotated[float, Form(ge=0)] = 1.0,
         include_elements: Annotated[bool, Form()] = True,
         include_blocks: Annotated[bool, Form()] = True,
@@ -23,6 +25,7 @@ class DXFExtractRequest(BaseModel):
         include_environments: Annotated[bool, Form()] = True,
     ) -> "DXFExtractRequest":
         return cls(
+            file_id=file_id,
             min_environment_area=min_environment_area,
             include_elements=include_elements,
             include_blocks=include_blocks,

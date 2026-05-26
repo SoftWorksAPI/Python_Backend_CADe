@@ -11,7 +11,7 @@ import tempfile
 import httpx
 from pypdf import PdfReader
 
-from src.config import NODE_BACKEND_URL
+from src.config import NODE_BACKEND_URL, INTERNAL_API_KEY
 from src.api.v1.services.rag.vectorstore import get_vectorstore
 
 
@@ -140,9 +140,10 @@ def _extract_text(file_path: str, file_type: str) -> str:
 def _buscar_normas_ativas() -> list[dict]:
     """Busca normas ativas do Backend Node.js."""
     url = f"{NODE_BACKEND_URL}/norm-files/internal/ativas"
+    headers = {"x-api-key": INTERNAL_API_KEY}
 
     with httpx.Client(timeout=30.0) as client:
-        response = client.get(url)
+        response = client.get(url, headers=headers)
         response.raise_for_status()
 
     data = response.json()

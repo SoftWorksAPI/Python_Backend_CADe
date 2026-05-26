@@ -13,19 +13,22 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 from src.api.v1.services.ai.client import chamar_openrouter
 from src.api.v1.services.ai.prompts import (
     SYSTEM_PROMPT_AUDITOR,
+    SYSTEM_PROMPT_RELATORIO_MD,
+    SYSTEM_PROMPT_RELATORIO_PDF,
+    build_relatorio_prompt,
     build_user_prompt,
 )
 from src.api.v1.schemas.dxf_schemas import DXFExtractRequest, DXFExtractResponse
 from src.api.v1.services.extract_dxf_service import extract_dxf_from_upload
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
-from src.api.v1.services.report.markdown_generator import gerar_markdown
-from src.api.v1.services.report.pdf_generator import gerar_pdf
+from src.api.v1.services.report.pdf_generator import gerar_pdf_de_texto
 
 
 # ---------------------------------------------------------------------------
@@ -162,28 +165,73 @@ def _node_parse_response(raw_text: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# No 4 - Montagem + geracao de relatorios
+# No 4 - Geracao de relatorio por IA
 # ---------------------------------------------------------------------------
+
+def gerar_relatorio_ia(
+    tipo: str,
+    dados_extracao: dict[str, Any],
+    memorial_descritivo: dict[str, Any],
+    normas_contexto: str = "",
+) -> str:
+    """
+    Gera o conteudo de um relatorio (MD ou PDF) usando a IA.
+
+    Args:
+        tipo: "md" para Markdown, "pdf" para texto puro (PDF)
+        dados_extracao: dados brutos da extracao DXF
+        memorial_descritivo: memorial tratado pela IA
+        normas_contexto: contexto de normas do RAG
+
+    Returns:
+        Conteudo do relatorio gerado pela IA (texto)
+    """
+    if tipo == "md":
+        system_prompt = SYSTEM_PROMPT_RELATORIO_MD
+    else:
+        system_prompt = SYSTEM_PROMPT_RELATORIO_PDF
+
+    user_prompt = build_relatorio_prompt(
+        tipo=tipo,
+        dados_extracao=dados_extracao,
+        memorial_descritivo=memorial_descritivo,
+        normas_contexto=normas_contexto,
+    )
+
+    return chamar_openrouter(system_prompt=system_prompt, user_prompt=user_prompt)
+
 
 def _node_assembly(
     memorial: dict[str, Any],
     dados_extracao: DXFExtractResponse,
     raw_llm_response: str,
+    normas_contexto: str = "",
 ) -> dict[str, Any]:
-    """Monta o resultado final e gera relatorios."""
+    """Monta o resultado final e gera relatorios via IA."""
     dados_dict = dados_extracao.model_dump(mode="json")
     arquivo = dados_extracao.arquivo
 
     relatorio_md = None
     relatorio_pdf = None
 
+    # Gerar Markdown via IA
     try:
-        relatorio_md = gerar_markdown(memorial, dados_dict, arquivo)
+        md_content = gerar_relatorio_ia("md", dados_dict, memorial, normas_contexto)
+        output_dir = Path(__file__).parent.parent / "report" / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        md_filename = f"{Path(arquivo).stem}_memorial_{ts}.md"
+        md_path = output_dir / md_filename
+        md_path.write_text(md_content, encoding="utf-8")
+        relatorio_md = str(md_path)
     except Exception:
         pass
 
+    # Gerar PDF via IA (texto -> PDF)
     try:
-        relatorio_pdf = gerar_pdf(memorial, dados_dict, arquivo)
+        pdf_content = gerar_relatorio_ia("pdf", dados_dict, memorial, normas_contexto)
+        relatorio_pdf = gerar_pdf_de_texto(pdf_content, arquivo)
     except Exception:
         pass
 
@@ -297,6 +345,87 @@ def _node_review(
 # Pipeline principal
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Pipeline — Apenas analise (extracao + RAG + LLM + parse, sem relatorios)
+# ---------------------------------------------------------------------------
+
+def executar_analise_dxf(
+    filename: str,
+    content: bytes,
+    options: DXFExtractRequest,
+) -> dict[str, Any]:
+    """
+    Executa apenas a analise do DXF:
+    Extracao -> RAG -> LLM -> Parse
+    Retorna os JSONs (bruto + tratado) sem gerar relatórios.
+    """
+    start_time = time.time()
+    print(f"\n{'='*60}")
+    print(f"[EXTRACT] Inicio - arquivo: {filename}")
+    print(f"{'='*60}")
+
+    try:
+        # No 1: Extracao deterministica
+        print(f"[EXTRACT] No 1 - Extraindo dados do DXF...")
+        dados = _node_extraction(filename, content, options)
+        print(f"[EXTRACT] No 1 - Extracao concluida: {dados.total_entidades} entidades")
+
+        if dados.total_entidades == 0:
+            print(f"[EXTRACT] ERRO: Nenhuma entidade encontrada no arquivo DXF")
+            return {
+                "sucesso": False,
+                "erro": "Nenhuma entidade encontrada no arquivo DXF.",
+                "memorial_descritivo": None,
+                "dados_extracao": dados.model_dump(mode="json"),
+            }
+
+        # No 1.5: Buscar normas relevantes no RAG
+        normas_contexto = ""
+        try:
+            query = _build_rag_query(dados)
+            print(f"[EXTRACT] No 1.5 - Buscando normas no RAG (query: {query[:80]}...)")
+            normas_contexto = buscar_normas_relevantes(query=query, k=5)
+            print(f"[EXTRACT] No 1.5 - RAG: {len(normas_contexto)} chars de normas encontradas")
+        except Exception as rag_err:
+            print(f"[EXTRACT] No 1.5 - RAG indisponivel: {rag_err}")
+
+        # No 2: Analise via LLM
+        print(f"[EXTRACT] No 2 - Enviando para LLM (OpenRouter)...")
+        raw_response = _node_llm_analysis(dados, normas_contexto)
+        print(f"[EXTRACT] No 2 - LLM analise concluida ({len(raw_response)} chars)")
+
+        # No 3: Parse da resposta
+        print(f"[EXTRACT] No 3 - Parseando resposta JSON...")
+        memorial = _node_parse_response(raw_response)
+        print(f"[EXTRACT] No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
+
+        dados_dict = dados.model_dump(mode="json")
+        elapsed = time.time() - start_time
+        print(f"[EXTRACT] Concluido com sucesso em {elapsed:.1f}s")
+
+        return {
+            "sucesso": True,
+            "memorial_descritivo": memorial,
+            "dados_extracao": dados_dict,
+            "confianca": memorial.get("confianca_analise", "media"),
+            "num_inconsistencias": len(memorial.get("inconsistencias_detectadas", [])),
+        }
+
+    except Exception as e:
+        elapsed = time.time() - start_time
+        print(f"[EXTRACT] ERRO apos {elapsed:.1f}s: {str(e)}")
+        return {
+            "sucesso": False,
+            "erro": str(e),
+            "memorial_descritivo": None,
+            "dados_extracao": None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline completo (analise + relatorios + revisao) — LEGADO
+# ---------------------------------------------------------------------------
+
 def executar_pipeline_memorial(
     filename: str,
     content: bytes,
@@ -306,9 +435,17 @@ def executar_pipeline_memorial(
     Executa o pipeline completo:
     Extracao -> RAG -> LLM -> Parse -> Montagem -> Revisao
     """
+    start_time = time.time()
+    print(f"\n{'='*60}")
+    print(f"[PIPELINE] Inicio - arquivo: {filename}")
+    print(f"{'='*60}")
+
     try:
+
         # No 1: Extracao deterministica
+        print(f"[PIPELINE] No 1 - Extraindo dados do DXF...")
         dados = _node_extraction(filename, content, options)
+        print(f"[PIPELINE] No 1 - Extracao concluida: {dados.total_entidades} entidades")
 
         if dados.total_entidades == 0:
             return {
@@ -322,25 +459,37 @@ def executar_pipeline_memorial(
         normas_contexto = ""
         try:
             query = _build_rag_query(dados)
+            print(f"[PIPELINE] No 1.5 - Buscando normas no RAG (query: {query[:80]}...)")
             normas_contexto = buscar_normas_relevantes(query=query, k=5)
-        except Exception:
-            pass
+            print(f"[PIPELINE] No 1.5 - RAG: {len(normas_contexto)} chars de normas encontradas")
+        except Exception as rag_err:
+            print(f"[PIPELINE] No 1.5 - RAG indisponivel: {rag_err}")
 
         # No 2: Analise via LLM
+        print(f"[PIPELINE] No 2 - Enviando para LLM (OpenRouter)...")
         raw_response = _node_llm_analysis(dados, normas_contexto)
+        print(f"[PIPELINE] No 2 - LLM analise concluida ({len(raw_response)} chars)")
 
         # No 3: Parse da resposta
+        print(f"[PIPELINE] No 3 - Parseando resposta JSON...")
         memorial = _node_parse_response(raw_response)
+        print(f"[PIPELINE] No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
 
-        # No 4: Montagem + relatorios
-        resultado = _node_assembly(memorial, dados, raw_response)
+        # No 4: Montagem + relatorios (via IA)
+        print(f"[PIPELINE] No 4 - Gerando relatorios MD e PDF via IA...")
+        resultado = _node_assembly(memorial, dados, raw_response, normas_contexto)
+        print(f"[PIPELINE] No 4 - MD gerado: {resultado.get('relatorio_md', 'falhou')}")
+        print(f"[PIPELINE] No 4 - PDF gerado: {resultado.get('relatorio_pdf', 'falhou')}")
 
         # No 5: Revisao do relatorio (max 3 tentativas)
         MAX_TENTATIVAS = 3
         revisao = None
+        dados_dict = resultado.get("dados_extracao", {})
 
         for tentativa in range(MAX_TENTATIVAS):
+            print(f"[PIPELINE] No 5 - Revisao tentativa {tentativa + 1}/{MAX_TENTATIVAS}...")
             revisao = _node_review(memorial, resultado.get("relatorio_md"))
+            print(f"[PIPELINE] No 5 - Revisao: {revisao.get('status', 'N/A')}")
 
             if revisao.get("status") == "CORRETO":
                 break
@@ -359,12 +508,7 @@ def executar_pipeline_memorial(
                     pass
 
                 try:
-                    resultado["relatorio_md"] = gerar_markdown(
-                        memorial, resultado.get("dados_extracao"), dados.arquivo
-                    )
-                    resultado["relatorio_pdf"] = gerar_pdf(
-                        memorial, resultado.get("dados_extracao"), dados.arquivo
-                    )
+                    resultado = _node_assembly(memorial, dados, raw_response, normas_contexto)
                 except Exception:
                     break
             else:
@@ -374,9 +518,13 @@ def executar_pipeline_memorial(
         revisao["tentativas"] = tentativa + 1
         resultado["revisao"] = revisao
 
+        elapsed = time.time() - start_time
+        print(f"[PIPELINE] Concluido com sucesso em {elapsed:.1f}s")
         return resultado
 
     except Exception as e:
+        elapsed = time.time() - start_time
+        print(f"[PIPELINE] ERRO apos {elapsed:.1f}s: {str(e)}")
         return {
             "sucesso": False,
             "erro": str(e),

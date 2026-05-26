@@ -383,9 +383,16 @@ def executar_analise_dxf(
         normas_contexto = ""
         try:
             query = _build_rag_query(dados)
-            print(f"[EXTRACT] No 1.5 - Buscando normas no RAG (query: {query[:80]}...)")
+            print(f"[EXTRACT] No 1.5 - Buscando normas no RAG (query: {query[:80]})")
             normas_contexto = buscar_normas_relevantes(query=query, k=5)
-            print(f"[EXTRACT] No 1.5 - RAG: {len(normas_contexto)} chars de normas encontradas")
+            if normas_contexto:
+                trechos = normas_contexto.split("\n\n---\n\n")
+                print(f"[EXTRACT] No 1.5 - RAG: {len(trechos)} trechos encontrados:")
+                for i, trecho in enumerate(trechos, 1):
+                    primeira_linha = trecho.split("\n")[0][:120]
+                    print(f"[EXTRACT] No 1.5 - RAG   [{i}] {primeira_linha}")
+            else:
+                print(f"[EXTRACT] No 1.5 - RAG: nenhuma norma encontrada")
         except Exception as rag_err:
             print(f"[EXTRACT] No 1.5 - RAG indisponivel: {rag_err}")
 

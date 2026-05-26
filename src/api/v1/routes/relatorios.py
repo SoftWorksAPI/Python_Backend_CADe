@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from src.api.v1.services.ai.pipeline import gerar_relatorio_ia
 from src.api.v1.services.report.pdf_generator import gerar_pdf_de_texto
+from src.api.v1.services.report.xlsx_generator import gerar_relatorio_xlsx
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
 
 router = APIRouter()
@@ -236,4 +237,54 @@ async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: Backgroun
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio PDF: {str(e)}",
+        )
+
+
+@router.post(
+    "/relatorios/xlsx",
+    summary="Gerar relatorio XLSX via IA",
+    description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
+    response_class=FileResponse,
+)
+async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Gera relatorio XLSX via IA e retorna como arquivo."""
+    start_time = time.time()
+    print(f"\n[RELATORIO] Gerando XLSX via IA - arquivo: {req.arquivo_original}")
+
+    # Buscar contexto RAG com query rica
+    normas_contexto = ""
+    try:
+        query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
+        print(f"[RELATORIO] RAG: buscando normas (query: {query[:100]})")
+        normas_contexto = buscar_normas_relevantes(query=query, k=5)
+        _log_rag_resultados(normas_contexto)
+    except Exception as rag_err:
+        print(f"[RELATORIO] RAG indisponivel: {rag_err}")
+
+    try:
+        print(f"[RELATORIO] Enviando para IA (geracao de XLSX)...")
+        caminho = gerar_relatorio_xlsx(
+            memorial_descritivo=req.memorial_descritivo,
+            dados_extracao=req.dados_extracao,
+            arquivo_original=req.arquivo_original,
+            normas_contexto=normas_contexto,
+        )
+
+        # Deletar apos envio
+        background_tasks.add_task(_deletar_arquivo, str(caminho))
+
+        elapsed = time.time() - start_time
+        print(f"[RELATORIO] XLSX gerado com sucesso em {elapsed:.1f}s: {caminho}")
+
+        return FileResponse(
+            path=caminho,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            filename=Path(caminho).name,
+        )
+    except Exception as e:
+        elapsed = time.time() - start_time
+        print(f"[RELATORIO] ERRO ao gerar XLSX apos {elapsed:.1f}s: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao gerar relatorio XLSX: {str(e)}",
         )

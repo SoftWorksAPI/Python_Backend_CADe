@@ -8,6 +8,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from reportlab.lib.colors import HexColor
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm, mm
+from reportlab.platypus import (
+    HRFlowable,
+    KeepTogether,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,20 +90,6 @@ def gerar_pdf(
     Gera PDF formatado do Memorial Descritivo.
     Retorna o caminho do arquivo gerado.
     """
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm, mm
-    from reportlab.lib.colors import HexColor
-    from reportlab.platypus import (
-        SimpleDocTemplate,
-        Paragraph,
-        Spacer,
-        Table,
-        TableStyle,
-        HRFlowable,
-        KeepTogether,
-    )
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 
     now = datetime.now()
     nome_arquivo = Path(arquivo_original).stem
@@ -399,17 +400,6 @@ def gerar_pdf_de_texto(
     Faz parse simples de titulos em CAIXA ALTA e listas com traco.
     Retorna o caminho do arquivo gerado.
     """
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.lib.colors import HexColor
-    from reportlab.platypus import (
-        SimpleDocTemplate,
-        Paragraph,
-        Spacer,
-        HRFlowable,
-    )
-    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 
     now = datetime.now()
     nome_arquivo = Path(arquivo_original).stem

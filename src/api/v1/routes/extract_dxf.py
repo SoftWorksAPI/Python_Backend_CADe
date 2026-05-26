@@ -9,7 +9,7 @@ from src.api.v1.services.extract_dxf_service import (
     extract_dxf_from_upload,
     generate_ai_prompt_string,
 )
-from src.api.v1.services.ai.pipeline import executar_pipeline_memorial
+from src.api.v1.services.ai.pipeline import executar_analise_dxf
 from src.api.v1.services.ai.client import chamar_openrouter
 from src.config import OPENROUTER_MODEL
 
@@ -96,7 +96,7 @@ async def ai_health_check():
 @router.post(
     "/extract/dxf",
     response_model=MemorialResponse,
-    summary="Pipeline completo: extrai DXF e gera Memorial Descritivo com IA",
+    summary="Extracao + RAG + LLM: extrai DXF e gera JSONs (sem relatorios)",
 )
 async def extract_dxf_memorial(
     file: Annotated[UploadFile, File(..., description="Arquivo DXF para extracao")],
@@ -104,13 +104,11 @@ async def extract_dxf_memorial(
 ) -> MemorialResponse:
     content = await _validate_and_read(file)
     try:
-        resultado = executar_pipeline_memorial(
+        resultado = executar_analise_dxf(
             filename=file.filename,
             content=content,
             options=payload,
         )
-        revisao_data = resultado.get("revisao")
-        revisao = RevisaoResponse(**revisao_data) if revisao_data else None
 
         return MemorialResponse(
             arquivo=file.filename,
@@ -119,9 +117,6 @@ async def extract_dxf_memorial(
             dados_extracao=resultado.get("dados_extracao"),
             confianca=resultado.get("confianca"),
             num_inconsistencias=resultado.get("num_inconsistencias"),
-            relatorio_md=resultado.get("relatorio_md"),
-            relatorio_pdf=resultado.get("relatorio_pdf"),
-            revisao=revisao,
             erro=resultado.get("erro"),
         )
     except DXFExtractionError as exc:

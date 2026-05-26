@@ -384,3 +384,107 @@ def gerar_pdf(
 
     doc.build(story)
     return str(caminho)
+
+
+# ---------------------------------------------------------------------------
+# Gerador de PDF a partir de texto gerado por IA
+# ---------------------------------------------------------------------------
+
+def gerar_pdf_de_texto(
+    texto_ia: str,
+    arquivo_original: str = "N/A",
+) -> str:
+    """
+    Gera PDF profissional a partir de TEXTO PURO gerado por IA.
+    Faz parse simples de titulos em CAIXA ALTA e listas com traco.
+    Retorna o caminho do arquivo gerado.
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Paragraph,
+        Spacer,
+        HRFlowable,
+    )
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+
+    now = datetime.now()
+    nome_arquivo = Path(arquivo_original).stem
+    nome_saida = f"{nome_arquivo}_memorial_{now.strftime('%Y%m%d_%H%M%S')}.pdf"
+    caminho = OUTPUT_DIR / nome_saida
+
+    doc = SimpleDocTemplate(
+        str(caminho),
+        pagesize=A4,
+        rightMargin=2 * cm,
+        leftMargin=2 * cm,
+        topMargin=2.5 * cm,
+        bottomMargin=2.5 * cm,
+    )
+
+    styles = getSampleStyleSheet()
+    navy = HexColor("#1a3c5e")
+    cinza = HexColor("#4a6d8c")
+    navy_light = HexColor("#2c5f8a")
+
+    titulo_style = ParagraphStyle("TituloIA", parent=styles["Title"], fontSize=18, textColor=navy, spaceAfter=6, alignment=TA_CENTER, fontName="Helvetica-Bold")
+    secao_style = ParagraphStyle("SecaoIA", parent=styles["Heading2"], fontSize=13, textColor=navy, spaceBefore=14, spaceAfter=6, fontName="Helvetica-Bold")
+    corpo_style = ParagraphStyle("CorpoIA", parent=styles["Normal"], fontSize=10, alignment=TA_JUSTIFY, spaceAfter=4, leading=14)
+    bullet_style = ParagraphStyle("BulletIA", parent=styles["Normal"], fontSize=10, alignment=TA_LEFT, spaceAfter=3, leftIndent=12, leading=13)
+    subtitulo_style = ParagraphStyle("SubIA", parent=styles["Normal"], fontSize=10, textColor=cinza, spaceAfter=8, alignment=TA_CENTER)
+
+    story = []
+
+    # Cabecalho
+    story.append(Spacer(1, 2 * cm))
+    story.append(Paragraph("MEMORIAL DESCRITIVO", titulo_style))
+    story.append(Spacer(1, 4 * mm))
+    story.append(HRFlowable(width="80%", thickness=2, color=navy))
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph(f"Arquivo: {_safe_str(arquivo_original)}", subtitulo_style))
+    story.append(Paragraph(f"Gerado em: {now.strftime('%d/%m/%Y as %H:%M')}", subtitulo_style))
+    story.append(Spacer(1, 1.5 * cm))
+
+    # Parse do texto da IA
+    linhas = texto_ia.split('\n')
+    for linha in linhas:
+        linha_strip = linha.strip()
+
+        if not linha_strip:
+            story.append(Spacer(1, 2 * mm))
+            continue
+
+        # Titulo: todo em caixa alta com mais de 3 caracteres (ex: "1. DADOS GERAIS")
+        if len(linha_strip) > 3 and linha_strip.isupper():
+            story.append(Spacer(1, 3 * mm))
+            story.append(Paragraph(html.escape(linha_strip), secao_style))
+            continue
+
+        # Linha de separacao
+        if linha_strip.startswith('---') or linha_strip.startswith('==='):
+            story.append(HRFlowable(width="100%", thickness=0.5, color=cinza))
+            continue
+
+        # Lista com traco
+        if linha_strip.startswith('- '):
+            item = linha_strip[2:].strip()
+            story.append(Paragraph(f"&#8226; {html.escape(item)}", bullet_style))
+            continue
+
+        # Paragrafo normal
+        story.append(Paragraph(html.escape(linha_strip), corpo_style))
+
+    # Rodape
+    story.append(Spacer(1, 1.5 * cm))
+    story.append(HRFlowable(width="100%", thickness=1, color=navy))
+    story.append(Spacer(1, 3 * mm))
+    story.append(Paragraph(
+        f"Documento gerado automaticamente pelo sistema <b>CADe</b> em {now.strftime('%d/%m/%Y as %H:%M')}.",
+        ParagraphStyle("RodapeIA", parent=subtitulo_style, fontSize=8, textColor=cinza),
+    ))
+
+    doc.build(story)
+    return str(caminho)

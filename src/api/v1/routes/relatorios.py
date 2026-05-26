@@ -1,20 +1,27 @@
 """
-Rotas para geracao de relatorios por IA (PDF e Markdown).
+Rotas para geracao de relatorios por IA (PDF, Markdown e XLSX).
 
 Recebem memorial_descritivo e dados_extracao como JSON no body
 e geram relatorios usando a IA (OpenRouter) com auxilio de RAG.
+Retornam JSON com { report: base64, review: markdown }.
 """
 from __future__ import annotations
 
+import base64
 import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.api.v1.services.ai.client import chamar_openrouter
 from src.api.v1.services.ai.pipeline import gerar_relatorio_ia
+from src.api.v1.services.ai.prompts import (
+    SYSTEM_PROMPT_REVISAO_RELATORIO,
+    build_revisao_prompt,
+)
 from src.api.v1.services.report.pdf_generator import gerar_pdf_de_texto
 from src.api.v1.services.report.xlsx_generator import gerar_relatorio_xlsx
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
@@ -125,6 +132,40 @@ class RelatorioRequest(BaseModel):
     )
 
 
+def _gerar_revisao_ia(
+    memorial_descritivo: dict[str, Any],
+    tipo_relatorio: str,
+    conteudo_relatorio: str,
+) -> str:
+    """Gera uma revisao tecnica do relatorio via IA."""
+    try:
+        prompt = build_revisao_prompt(
+            memorial_descritivo=memorial_descritivo,
+            tipo_relatorio=tipo_relatorio,
+            conteudo_relatorio=conteudo_relatorio,
+        )
+        revisao = chamar_openrouter(SYSTEM_PROMPT_REVISAO_RELATORIO, prompt)
+        print(f"[REVISAO] Revisao gerada ({len(revisao)} chars)")
+        return revisao
+    except Exception as e:
+        print(f"[REVISAO] AVISO: falha ao gerar revisao: {e}")
+        return f"## Revisao indisponivel\n\nErro ao gerar revisao: {str(e)}"
+
+
+def _build_json_response(caminho: str, revisao: str, media_type: str) -> JSONResponse:
+    """Monta JSONResponse com arquivo em base64 + revisao."""
+    file_bytes = Path(caminho).read_bytes()
+    report_b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+    return JSONResponse(
+        content={
+            "report": report_b64,
+            "review": revisao,
+        },
+        media_type="application/json",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -133,10 +174,9 @@ class RelatorioRequest(BaseModel):
     "/relatorios/markdown",
     summary="Gerar relatorio Markdown via IA",
     description="Gera um relatorio Markdown completo usando IA, com base no memorial descritivo e dados de extracao.",
-    response_class=FileResponse,
 )
 async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks):
-    """Gera relatorio Markdown via IA e retorna como arquivo."""
+    """Gera relatorio Markdown via IA e retorna JSON com report (base64) + review."""
     start_time = time.time()
     print(f"\n[RELATORIO] Gerando Markdown via IA - arquivo: {req.arquivo_original}")
 
@@ -167,17 +207,16 @@ async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: Back
         caminho = OUTPUT_DIR / nome_arquivo
         caminho.write_text(conteudo, encoding="utf-8")
 
+        # Gerar revisao da IA
+        revisao = _gerar_revisao_ia(req.memorial_descritivo, "Markdown", conteudo)
+
         # Deletar apos envio
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
         print(f"[RELATORIO] Markdown gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
-        return FileResponse(
-            path=str(caminho),
-            media_type="text/markdown",
-            filename=nome_arquivo,
-        )
+        return _build_json_response(str(caminho), revisao, "text/markdown")
     except Exception as e:
         elapsed = time.time() - start_time
         print(f"[RELATORIO] ERRO ao gerar Markdown apos {elapsed:.1f}s: {str(e)}")
@@ -191,10 +230,9 @@ async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: Back
     "/relatorios/pdf",
     summary="Gerar relatorio PDF via IA",
     description="Gera um relatorio PDF profissional usando IA, com base no memorial descritivo e dados de extracao.",
-    response_class=FileResponse,
 )
 async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks):
-    """Gera relatorio PDF via IA e retorna como arquivo."""
+    """Gera relatorio PDF via IA e retorna JSON com report (base64) + review."""
     start_time = time.time()
     print(f"\n[RELATORIO] Gerando PDF via IA - arquivo: {req.arquivo_original}")
 
@@ -220,17 +258,16 @@ async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: Backgroun
 
         caminho = gerar_pdf_de_texto(texto_ia, req.arquivo_original)
 
+        # Gerar revisao da IA
+        revisao = _gerar_revisao_ia(req.memorial_descritivo, "PDF", texto_ia)
+
         # Deletar apos envio
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
         print(f"[RELATORIO] PDF gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
-        return FileResponse(
-            path=caminho,
-            media_type="application/pdf",
-            filename=Path(caminho).name,
-        )
+        return _build_json_response(caminho, revisao, "application/pdf")
     except Exception as e:
         elapsed = time.time() - start_time
         print(f"[RELATORIO] ERRO ao gerar PDF apos {elapsed:.1f}s: {str(e)}")
@@ -244,10 +281,9 @@ async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: Backgroun
     "/relatorios/xlsx",
     summary="Gerar relatorio XLSX via IA",
     description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
-    response_class=FileResponse,
 )
 async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks):
-    """Gera relatorio XLSX via IA e retorna como arquivo."""
+    """Gera relatorio XLSX via IA e retorna JSON com report (base64) + review."""
     start_time = time.time()
     print(f"\n[RELATORIO] Gerando XLSX via IA - arquivo: {req.arquivo_original}")
 
@@ -263,7 +299,7 @@ async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks:
 
     try:
         print(f"[RELATORIO] Enviando para IA (geracao de XLSX)...")
-        caminho = gerar_relatorio_xlsx(
+        caminho, revisao = gerar_relatorio_xlsx(
             memorial_descritivo=req.memorial_descritivo,
             dados_extracao=req.dados_extracao,
             arquivo_original=req.arquivo_original,
@@ -276,11 +312,7 @@ async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks:
         elapsed = time.time() - start_time
         print(f"[RELATORIO] XLSX gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
-        return FileResponse(
-            path=caminho,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            filename=Path(caminho).name,
-        )
+        return _build_json_response(caminho, revisao, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         elapsed = time.time() - start_time
         print(f"[RELATORIO] ERRO ao gerar XLSX apos {elapsed:.1f}s: {str(e)}")

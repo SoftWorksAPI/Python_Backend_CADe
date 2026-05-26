@@ -384,3 +384,92 @@ comercial, industrial, militar, etc.). Adapte os dados ao contexto.
 10. A linha total_row deve conter "Total" na primeira posicao e somas \
 dos valores numericos nas demais posicoes.
 """
+
+
+SYSTEM_PROMPT_REVISAO_RELATORIO = """\
+Voce e um engenheiro civil revisor senior. Sua funcao e analisar um \
+relatorio que foi gerado por IA e produzir uma revisao tecnica.
+
+Retorne APENAS texto em Markdown (sem JSON, sem fences, sem codigo).
+
+Estrutura obrigatoria da revisao:
+1. "## Relatorio Gerado" - Breve resumo do que foi gerado (numero de \
+secoes/abas, dados preenchidos).
+2. "## O que foi preenchido" - Liste as secoes/tabelas que foram \
+preenchidas com sucesso.
+3. "## O que nao foi possivel preencher" - Liste secoes que ficaram \
+vazias ou com valores padrao (0,00). Explique o motivo (dados \
+insuficientes no memorial, secao nao aplicavel ao projeto, etc.).
+4. "## Pontos de atencao" - Liste pontos que o usuario deve verificar \
+manualmente. Inclua valores que parecem inconsistentes ou que precisam \
+de validacao.
+
+Seja objetivo e tecnico. Use terminologia da engenharia civil brasileira.
+Maximo 500 palavras.
+"""
+
+
+def build_revisao_prompt(
+    memorial_descritivo: dict[str, Any],
+    tipo_relatorio: str,
+    conteudo_relatorio: str,
+) -> str:
+    """Monta o user prompt para a IA gerar a revisao de um relatorio."""
+    memorial_str = json.dumps(memorial_descritivo, ensure_ascii=False, indent=2)
+
+    prompt = f"""\
+Gere uma revisao tecnica para o relatorio do tipo "{tipo_relatorio}" \
+que foi gerado para o projeto abaixo.
+
+MEMORIAL DESCRITIVO:
+================================================================
+{memorial_str[:6000]}
+
+================================================================
+CONTEUDO DO RELATORIO GERADO:
+================================================================
+{conteudo_relatorio[:6000]}
+
+Gere a revisao seguindo a estrutura definida no system prompt."""
+
+    return prompt
+
+
+def build_xlsx_revisao_prompt(
+    memorial_descritivo: dict[str, Any],
+    ai_data: dict[str, Any],
+) -> str:
+    """Monta o user prompt para revisao de um relatorio XLSX."""
+    memorial_str = json.dumps(memorial_descritivo, ensure_ascii=False, indent=2)
+
+    # Resumir os dados gerados pela IA
+    resumo_abas = []
+    for sheet in ai_data.get("sheets", []):
+        sections_info = []
+        for sec in sheet.get("sections", []):
+            rows = sec.get("rows", [])
+            preenchidas = sum(1 for r in rows if any(c and c != "0,00" for c in r))
+            total_row = sec.get("total_row")
+            sections_info.append(
+                f"  - {sec.get('section_name', '?')}: {preenchidas}/{len(rows)} linhas preenchidas"
+            )
+        resumo_abas.append(f"### {sheet.get('name', '?')}\n" + "\n".join(sections_info))
+
+    resumo_str = "\n".join(resumo_abas)
+
+    prompt = f"""\
+Gere uma revisao tecnica para o relatorio XLSX (memorial descritivo) \
+que foi gerado para o projeto abaixo.
+
+MEMORIAL DESCRITIVO:
+================================================================
+{memorial_str[:6000]}
+
+================================================================
+RESUMO DOS DADOS GERADOS PELA IA (por aba e secao):
+================================================================
+{resumo_str[:4000]}
+
+Gere a revisao seguindo a estrutura definida no system prompt."""
+
+    return prompt

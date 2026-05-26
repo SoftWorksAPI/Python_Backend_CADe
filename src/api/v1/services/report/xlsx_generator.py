@@ -18,7 +18,11 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from src.api.v1.services.ai.client import chamar_openrouter
-from src.api.v1.services.ai.prompts import SYSTEM_PROMPT_RELATORIO_XLSX
+from src.api.v1.services.ai.prompts import (
+    SYSTEM_PROMPT_RELATORIO_XLSX,
+    SYSTEM_PROMPT_REVISAO_RELATORIO,
+    build_xlsx_revisao_prompt,
+)
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -795,12 +799,12 @@ def gerar_relatorio_xlsx(
     dados_extracao: dict[str, Any],
     arquivo_original: str = "N/A",
     normas_contexto: str = "",
-) -> str:
+) -> tuple[str, str]:
     """
-    Pipeline completo: monta prompt -> chama IA -> parseia -> gera XLSX.
+    Pipeline completo: monta prompt -> chama IA -> parseia -> gera XLSX -> revisao.
 
     Returns:
-        Path do arquivo XLSX gerado.
+        Tupla (path do arquivo XLSX, revisao em Markdown).
     """
     print(f"[XLSX] Iniciando geracao de relatorio XLSX...")
 
@@ -821,4 +825,14 @@ def gerar_relatorio_xlsx(
     # 4. Gerar XLSX
     caminho = gerar_xlsx(ai_data, arquivo_original)
 
-    return caminho
+    # 5. Gerar revisao da IA
+    print(f"[XLSX] Gerando revisao da IA...")
+    try:
+        revisao_prompt = build_xlsx_revisao_prompt(memorial_descritivo, ai_data)
+        revisao_md = chamar_openrouter(SYSTEM_PROMPT_REVISAO_RELATORIO, revisao_prompt)
+        print(f"[XLSX] Revisao gerada ({len(revisao_md)} chars)")
+    except Exception as e:
+        print(f"[XLSX] AVISO: falha ao gerar revisao: {e}")
+        revisao_md = f"## Revisao indisponivel\n\nErro ao gerar revisao: {str(e)}"
+
+    return caminho, revisao_md

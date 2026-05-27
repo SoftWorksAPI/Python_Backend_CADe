@@ -1,9 +1,10 @@
 """
 Rotas para gerenciamento do RAG de normas tecnicas.
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from src.api.v1.dependencies import verify_api_key
 from src.api.v1.services.rag.ingestion import sincronizar_normas
 from src.api.v1.services.rag.vectorstore import status_vectorstore, limpar_vectorstore
 
@@ -29,6 +30,7 @@ router = APIRouter()
         "Busca as normas ativas (ativo=true) do Backend Node.js, "
         "baixa os PDFs, extrai o texto, gera embeddings e indexa no ChromaDB."
     ),
+    dependencies=[Depends(verify_api_key)],
 )
 async def rag_sync() -> SyncResponse:
     resultado = sincronizar_normas()
@@ -39,6 +41,7 @@ async def rag_sync() -> SyncResponse:
     "/rag/health",
     summary="Status do ChromaDB",
     description="Retorna o status do banco vetorial: total de chunks, normas indexadas.",
+    dependencies=[Depends(verify_api_key)],
 )
 async def rag_health():
     return status_vectorstore()
@@ -48,6 +51,7 @@ async def rag_health():
     "/rag/clear",
     summary="Limpa todo o ChromaDB",
     description="Remove todos os chunks indexados. Use com cuidado.",
+    dependencies=[Depends(verify_api_key)],
 )
 async def rag_clear():
     return limpar_vectorstore()

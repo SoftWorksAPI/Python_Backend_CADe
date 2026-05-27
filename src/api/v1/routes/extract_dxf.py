@@ -11,6 +11,7 @@ from src.api.v1.services.extract_dxf_service import (
 )
 from src.api.v1.services.ai.pipeline import executar_analise_dxf
 from src.api.v1.services.ai.client import chamar_openrouter
+from src.api.v1.dependencies import verify_api_key
 from src.config import OPENROUTER_MODEL
 
 
@@ -75,6 +76,7 @@ router = APIRouter()
 @router.get(
     "/ai/health",
     summary="Testa se a IA esta online e respondendo",
+    dependencies=[Depends(verify_api_key)],
 )
 async def ai_health_check():
     try:

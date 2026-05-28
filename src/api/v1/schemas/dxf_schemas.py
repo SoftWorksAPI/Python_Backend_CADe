@@ -77,6 +77,7 @@ class EnvironmentItem(BaseModel):
     ambiente: str
     area: float
     perimetro: float
+    categoria: str = "outro"
 
 
 class DimensionItem(BaseModel):
@@ -137,3 +138,5 @@ class DXFExtractResponse(BaseModel):
     leaders: list[LeaderItem] = Field(default_factory=list)
     hatches: list[HatchItem] = Field(default_factory=list)
     analise_estrutural: StructuralAnalysis | None = None
+    aberturas_vinculadas: list[dict[str, Any]] = Field(default_factory=list)
+    volumes_estruturais: dict[str, Any] = Field(default_factory=dict)

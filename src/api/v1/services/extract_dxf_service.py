@@ -24,6 +24,10 @@ from src.api.v1.schemas.dxf_schemas import (
     SummaryItem,
     TextItem,
 )
+from src.api.v1.services.geometry_engine import processar_geometria
+from src.api.v1.services.room_classifier import classificar_ambientes
+from src.api.v1.services.spatial_linker import vincular_aberturas_paredes
+from src.api.v1.services.structural_calculator import calcular_volumes_estruturais
 
 
 class DXFExtractionError(Exception):
@@ -515,16 +519,58 @@ def extract_dxf_from_upload(
         except Exception:
             continue
 
-    # --- Ambientes ---
+    # --- Ambientes (com geometry engine avancado) ---
     ambientes: list[EnvironmentItem] = []
     if options.include_environments:
         try:
-            polygons = list(polygonize(linhas))
+            # Usar geometry engine para poligonizacao avancada
+            segments = [(list(ls.coords[0]), list(ls.coords[-1])) for ls in linhas]
+            polygons = processar_geometria(segments, tolerance=0.005)
         except Exception:
-            polygons = []
+            # Fallback para poligonizacao basica
+            try:
+                polygons = list(polygonize(linhas))
+            except Exception:
+                polygons = []
+
         for index, polygon in enumerate(polygons, start=1):
             if polygon.area >= options.min_environment_area:
-                ambientes.append(EnvironmentItem(ambiente=f"Amb_{index}", area=float(polygon.area), perimetro=float(polygon.length)))
+                ambientes.append(EnvironmentItem(
+                    ambiente=f"Amb_{index}",
+                    area=float(polygon.area),
+                    perimetro=float(polygon.length),
+                ))
+
+        # Classificar ambientes por categoria
+        textos_dicts = [{"texto": t.texto, "layer": t.layer} for t in textos]
+        ambientes_dicts = [a.model_dump() for a in ambientes]
+        classificados = classificar_ambientes(ambientes_dicts, textos_dicts)
+        ambientes = [
+            EnvironmentItem(**a) if "categoria" not in a else EnvironmentItem(**a)
+            for a in classificados
+        ]
+
+    # --- Vinculacao espacial (aberturas a paredes) ---
+    aberturas_vinculadas = []
+    if options.include_blocks:
+        try:
+            blocos_dicts = [b.model_dump() for b in blocos]
+            elementos_dicts = [e.model_dump() for e in elementos]
+            aberturas_vinculadas = vincular_aberturas_paredes(blocos_dicts, elementos_dicts)
+        except Exception:
+            pass
+
+    # --- Calculo estrutural detalhado ---
+    volumes_estruturais = {}
+    if options.include_elements:
+        try:
+            elementos_dicts = [e.model_dump() for e in elementos]
+            blocos_dicts = [b.model_dump() for b in blocos]
+            volumes_estruturais = calcular_volumes_estruturais(
+                elementos_dicts, blocos_dicts, aberturas_vinculadas
+            )
+        except Exception:
+            pass
 
     # --- Resumo ---
     resumo: list[SummaryItem] = []
@@ -558,4 +604,6 @@ def extract_dxf_from_upload(
         dimensions=dimensions,
         leaders=leaders,
         hatches=hatches,
+        aberturas_vinculadas=aberturas_vinculadas,
+        volumes_estruturais=volumes_estruturais,
     )

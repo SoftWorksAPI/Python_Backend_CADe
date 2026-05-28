@@ -79,9 +79,11 @@ def build_user_prompt(dados_extracao: dict[str, Any], normas_contexto: str = "")
 
     ambientes_str = ""
     for a in dados_extracao.get("ambientes", [])[:MAX_AMBIENTES]:
+        cat = a.get('categoria', 'outro')
         ambientes_str += (
             f"  - {a['ambiente']}: {a['area']:.2f} m2 | "
-            f"Perimetro: {a['perimetro']:.2f} m\n"
+            f"Perimetro: {a['perimetro']:.2f} m | "
+            f"Categoria: {cat}\n"
         )
 
     blocos_str = ""
@@ -123,6 +125,28 @@ def build_user_prompt(dados_extracao: dict[str, Any], normas_contexto: str = "")
         textos_estr = analise_estrutural.get("textos_estruturais", [])
         if textos_estr:
             estrutural_str += f"\n  Textos estruturais: {', '.join(textos_estr[:10])}\n"
+
+    # Volumes estruturais detalhados (com deducoes)
+    volumes_str = ""
+    volumes_estruturais = dados_extracao.get("volumes_estruturais", {})
+    if volumes_estruturais:
+        resumo_vol = volumes_estruturais.get("resumo", {})
+        if resumo_vol:
+            volumes_str += f"  Volume total de concreto: {resumo_vol.get('volume_total_concreto_m3', 0):.3f} m3\n"
+            volumes_str += f"  - Paredes: {resumo_vol.get('volume_paredes_m3', 0):.3f} m3\n"
+            volumes_str += f"  - Vigas: {resumo_vol.get('volume_vigas_m3', 0):.3f} m3\n"
+            volumes_str += f"  - Pilares: {resumo_vol.get('volume_pilares_m3', 0):.3f} m3\n"
+            volumes_str += f"  - Lajes: {resumo_vol.get('volume_lajes_m3', 0):.3f} m3\n"
+            volumes_str += f"  - Fundacoes: {resumo_vol.get('volume_fundacoes_m3', 0):.3f} m3\n"
+
+    volumes_section = ""
+    if volumes_str:
+        volumes_section = f"""
+================================================================
+VOLUMES ESTRUTURAIS DETALHADOS:
+================================================================
+{volumes_str}
+"""
 
     estrutural_section = ""
     if estrutural_str:
@@ -182,6 +206,7 @@ TEXTOS DO DESENHO:
 ================================================================
 {textos_str if textos_str else '  Nenhum texto encontrado.'}
 {estrutural_section}
+{volumes_section}
 {normas_section}
 Gere o Memorial Descritivo no formato JSON abaixo:
 {{

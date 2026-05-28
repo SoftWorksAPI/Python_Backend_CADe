@@ -28,6 +28,7 @@ from src.api.v1.services.ai.prompts import (
 from src.api.v1.schemas.dxf_schemas import DXFExtractRequest, DXFExtractResponse
 from src.api.v1.services.extract_dxf_service import extract_dxf_from_upload
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
+from src.api.v1.services.structural_analysis import analisar_estrutural
 from src.api.v1.services.report.pdf_generator import gerar_pdf_de_texto
 
 
@@ -110,9 +111,10 @@ def _build_rag_query(dados: DXFExtractResponse) -> str:
 def _node_llm_analysis(
     dados_extracao: DXFExtractResponse,
     normas_contexto: str = "",
+    dados_dict_override: dict[str, Any] | None = None,
 ) -> str:
     """Envia os dados extraidos ao LLM via OpenRouter."""
-    dados_dict = dados_extracao.model_dump(mode="json")
+    dados_dict = dados_dict_override or dados_extracao.model_dump(mode="json")
     user_prompt = build_user_prompt(dados_dict, normas_contexto)
 
     return chamar_openrouter(
@@ -127,11 +129,17 @@ def _node_llm_analysis(
 
 def _node_parse_response(raw_text: str) -> dict[str, Any]:
     """Tenta parsear o JSON retornado pelo LLM com fallback."""
+    if not raw_text or not raw_text.strip():
+        print("[PARSE] ERRO: Resposta vazia do LLM")
+        return _build_fallback_memorial("LLM retornou resposta vazia")
+
+    # Tentar 1: JSON puro
     try:
         return json.loads(raw_text)
     except json.JSONDecodeError:
         pass
 
+    # Tentar 2: JSON dentro de bloco de codigo markdown
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", raw_text, re.DOTALL)
     if match:
         try:
@@ -139,6 +147,7 @@ def _node_parse_response(raw_text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
+    # Tentar 3: Primeiro objeto JSON encontrado
     match = re.search(r"\{.*\}", raw_text, re.DOTALL)
     if match:
         try:
@@ -146,21 +155,59 @@ def _node_parse_response(raw_text: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             pass
 
+    # Tentar 4: Limpar caracteres problematicos e tentar novamente
+    cleaned = raw_text.strip()
+    # Remover BOM e caracteres de controle
+    cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
+    # Tentar extrair JSON apos primeira { ate ultima }
+    first_brace = cleaned.find('{')
+    last_brace = cleaned.rfind('}')
+    if first_brace != -1 and last_brace > first_brace:
+        try:
+            return json.loads(cleaned[first_brace:last_brace + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # Tentar 5: JSON truncado - tentar fechar chaves pendentes
+    if first_brace != -1:
+        fragment = cleaned[first_brace:]
+        # Contar chaves abertas vs fechadas
+        open_braces = fragment.count('{') - fragment.count('}')
+        open_brackets = fragment.count('[') - fragment.count(']')
+        # Tentar fechar com chaves/colchetes pendentes
+        if open_braces > 0 or open_brackets > 0:
+            # Remover ultimo valor incompleto (ate a ultima virgula ou chave)
+            last_comma = max(fragment.rfind(','), fragment.rfind(':'))
+            if last_comma > len(fragment) - 200:  # So se o corte foi recente
+                fragment = fragment[:last_comma]
+            # Fechar estruturas pendentes
+            fragment += ']' * open_brackets + '}' * open_braces
+            try:
+                result = json.loads(fragment)
+                print("[PARSE] AVISO: JSON truncado foi recuperado com sucesso")
+                return result
+            except json.JSONDecodeError:
+                pass
+
+    # Fallback: retornar memorial basico com dados da resposta bruta
+    print(f"[PARSE] AVISO: Nao foi possivel parsear JSON. Resposta: {raw_text[:200]}...")
+    return _build_fallback_memorial(f"Resposta do LLM nao e JSON valido: {raw_text[:500]}")
+
+
+def _build_fallback_memorial(erro: str) -> dict[str, Any]:
+    """Retorna um memorial descritivo basico quando o parse falha."""
     return {
         "dados_gerais": {
             "nome_obra": "Nao identificado",
-            "descricao_geral": raw_text,
+            "descricao_geral": "Erro ao processar resposta da IA",
         },
         "ambientes": [],
         "elementos_estruturais": {},
         "instalacoes": {},
         "cotas_anotacoes": {},
-        "observacoes_tecnicas": [],
-        "inconsistencias_detectadas": [
-            "Nao foi possivel parsear a resposta do LLM como JSON."
-        ],
+        "observacoes_tecnicas": ["Erro no processamento da IA"],
+        "inconsistencias_detectadas": [erro],
         "confianca_analise": "baixa",
-        "resposta_bruta_llm": raw_text,
     }
 
 
@@ -379,6 +426,17 @@ def executar_analise_dxf(
                 "dados_extracao": dados.model_dump(mode="json"),
             }
 
+        # No 1.2: Analise Estrutural
+        print(f"[EXTRACT] No 1.2 - Analisando elementos estruturais...")
+        analise_estrutural = analisar_estrutural(dados)
+        n_estruturais = analise_estrutural["resumo"]["total_elementos_estruturais"]
+        vol_concreto = analise_estrutural["resumo"]["volume_total_concreto_m3"]
+        print(f"[EXTRACT] No 1.2 - Estrutural: {n_estruturais} elementos, {vol_concreto} m3 de concreto")
+
+        # Montar dict com dados de extracao + analise estrutural
+        dados_dict = dados.model_dump(mode="json")
+        dados_dict["analise_estrutural"] = analise_estrutural
+
         # No 1.5: Buscar normas relevantes no RAG
         normas_contexto = ""
         try:
@@ -398,7 +456,7 @@ def executar_analise_dxf(
 
         # No 2: Analise via LLM
         print(f"[EXTRACT] No 2 - Enviando para LLM (OpenRouter)...")
-        raw_response = _node_llm_analysis(dados, normas_contexto)
+        raw_response = _node_llm_analysis(dados, normas_contexto, dados_dict_override=dados_dict)
         print(f"[EXTRACT] No 2 - LLM analise concluida ({len(raw_response)} chars)")
 
         # No 3: Parse da resposta
@@ -406,7 +464,6 @@ def executar_analise_dxf(
         memorial = _node_parse_response(raw_response)
         print(f"[EXTRACT] No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
 
-        dados_dict = dados.model_dump(mode="json")
         elapsed = time.time() - start_time
         print(f"[EXTRACT] Concluido com sucesso em {elapsed:.1f}s")
 
@@ -462,6 +519,17 @@ def executar_pipeline_memorial(
                 "dados_extracao": dados.model_dump(mode="json"),
             }
 
+        # No 1.2: Analise Estrutural
+        print(f"[PIPELINE] No 1.2 - Analisando elementos estruturais...")
+        analise_estrutural = analisar_estrutural(dados)
+        n_estruturais = analise_estrutural["resumo"]["total_elementos_estruturais"]
+        vol_concreto = analise_estrutural["resumo"]["volume_total_concreto_m3"]
+        print(f"[PIPELINE] No 1.2 - Estrutural: {n_estruturais} elementos, {vol_concreto} m3 de concreto")
+
+        # Montar dict com dados de extracao + analise estrutural
+        dados_dict = dados.model_dump(mode="json")
+        dados_dict["analise_estrutural"] = analise_estrutural
+
         # No 1.5: Buscar normas relevantes no RAG
         normas_contexto = ""
         try:
@@ -474,7 +542,7 @@ def executar_pipeline_memorial(
 
         # No 2: Analise via LLM
         print(f"[PIPELINE] No 2 - Enviando para LLM (OpenRouter)...")
-        raw_response = _node_llm_analysis(dados, normas_contexto)
+        raw_response = _node_llm_analysis(dados, normas_contexto, dados_dict_override=dados_dict)
         print(f"[PIPELINE] No 2 - LLM analise concluida ({len(raw_response)} chars)")
 
         # No 3: Parse da resposta
@@ -492,6 +560,8 @@ def executar_pipeline_memorial(
         MAX_TENTATIVAS = 3
         revisao = None
         dados_dict = resultado.get("dados_extracao", {})
+        # Incluir analise estrutural no dict final
+        dados_dict["analise_estrutural"] = analise_estrutural
 
         for tentativa in range(MAX_TENTATIVAS):
             print(f"[PIPELINE] No 5 - Revisao tentativa {tentativa + 1}/{MAX_TENTATIVAS}...")
@@ -524,6 +594,7 @@ def executar_pipeline_memorial(
 
         revisao["tentativas"] = tentativa + 1
         resultado["revisao"] = revisao
+        resultado["analise_estrutural"] = analise_estrutural
 
         elapsed = time.time() - start_time
         print(f"[PIPELINE] Concluido com sucesso em {elapsed:.1f}s")

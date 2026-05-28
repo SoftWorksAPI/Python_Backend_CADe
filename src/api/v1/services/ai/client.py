@@ -36,9 +36,20 @@ def chamar_openrouter(system_prompt: str, user_prompt: str) -> str:
         ],
     }
 
-    with httpx.Client(timeout=120.0) as client:
+    with httpx.Client(timeout=180.0) as client:
         response = client.post(OPENROUTER_URL, json=payload, headers=headers)
         response.raise_for_status()
 
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+
+    # Verificar se a resposta foi truncada
+    choice = data["choices"][0]
+    finish_reason = choice.get("finish_reason", "")
+    if finish_reason == "length":
+        print("[OpenRouter] AVISO: Resposta truncada por limite de tokens (max_tokens muito baixo)")
+
+    content = choice["message"]["content"]
+    if not content or not content.strip():
+        raise ValueError("OpenRouter retornou resposta vazia")
+
+    return content

@@ -104,6 +104,27 @@ class HatchItem(BaseModel):
     ponto_semente: tuple[float, float] | None = None
 
 
+class StructuralElementItem(BaseModel):
+    tipo: str
+    quantidade: int
+    comprimento_total: float = 0.0
+    area_total: float = 0.0
+    volume_estimado: float | None = None
+
+
+class StructuralSummary(BaseModel):
+    total_elementos_estruturais: int
+    volume_total_concreto_m3: float
+    tipos_encontrados: list[str] = Field(default_factory=list)
+    tipos_ausentes: list[str] = Field(default_factory=list)
+
+
+class StructuralAnalysis(BaseModel):
+    elementos: list[StructuralElementItem] = Field(default_factory=list)
+    resumo: StructuralSummary | None = None
+    textos_estruturais: list[str] = Field(default_factory=list)
+
+
 class DXFExtractResponse(BaseModel):
     arquivo: str
     total_entidades: int
@@ -115,3 +136,4 @@ class DXFExtractResponse(BaseModel):
     dimensions: list[DimensionItem] = Field(default_factory=list)
     leaders: list[LeaderItem] = Field(default_factory=list)
     hatches: list[HatchItem] = Field(default_factory=list)
+    analise_estrutural: StructuralAnalysis | None = None

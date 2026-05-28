@@ -27,6 +27,9 @@ sem texto extra antes ou depois do JSON.
 5. Utilize terminologia tecnica da engenharia civil brasileira (NBRs).
 6. Se houver CONTEXTO DE NORMAS no prompt, utilize-o para validar \
 conformidade e inclua observacoes tecnicas baseadas nas normas.
+7. Seja CONCISO nas descricoes. Cada descricao de ambiente deve ter \
+no maximo 2 frases. Nao repita informacoes.
+8. Limite descricoes longas a no maximo 100 caracteres por campo.
 """
 
 SYSTEM_PROMPT_REVISOR = """\
@@ -46,11 +49,27 @@ Se o relatorio estiver correto, responda apenas "CORRETO".
 """
 
 
+def _truncar(texto: str, limite: int = 100) -> str:
+    """Trunca texto longo."""
+    if len(texto) > limite:
+        return texto[:limite] + "..."
+    return texto
+
+
 def build_user_prompt(dados_extracao: dict[str, Any], normas_contexto: str = "") -> str:
     """Monta o prompt do usuario com os dados da extracao DXF."""
 
+    # Limites para controlar tamanho do prompt
+    MAX_RESUMO = 30
+    MAX_AMBIENTES = 20
+    MAX_BLOCOS = 30
+    MAX_DIMS = 15
+    MAX_LEADERS = 10
+    MAX_TEXTOS = 20
+    MAX_NORMAS = 2000
+
     resumo_str = ""
-    for r in dados_extracao.get("resumo", []):
+    for r in dados_extracao.get("resumo", [])[:MAX_RESUMO]:
         resumo_str += (
             f"  - Layer: {r['layer']} | Tipo: {r['tipo']} | "
             f"Qtd: {r['quantidade']} | "
@@ -59,38 +78,69 @@ def build_user_prompt(dados_extracao: dict[str, Any], normas_contexto: str = "")
         )
 
     ambientes_str = ""
-    for a in dados_extracao.get("ambientes", []):
+    for a in dados_extracao.get("ambientes", [])[:MAX_AMBIENTES]:
         ambientes_str += (
             f"  - {a['ambiente']}: {a['area']:.2f} m2 | "
             f"Perimetro: {a['perimetro']:.2f} m\n"
         )
 
     blocos_str = ""
-    for b in dados_extracao.get("blocos", []):
-        geo = b.get("geometria_interna", [])
-        geo_info = f" | {len(geo)} entidades internas" if geo else ""
-        blocos_str += f"  - [{b['layer']}] {b['bloco']}: {b['texto']}{geo_info}\n"
+    for b in dados_extracao.get("blocos", [])[:MAX_BLOCOS]:
+        texto = _truncar(b.get("texto", ""), 80)
+        blocos_str += f"  - [{b['layer']}] {b['bloco']}: {texto}\n"
 
     dims_str = ""
-    for d in dados_extracao.get("dimensions", []):
+    for d in dados_extracao.get("dimensions", [])[:MAX_DIMS]:
         medido = f" | Medido: {d['valor_medido']}" if d.get("valor_medido") else ""
-        dims_str += f"  - [{d['layer']}] {d['valor_texto']}{medido}\n"
+        dims_str += f"  - [{d['layer']}] {_truncar(d.get('valor_texto', ''), 50)}{medido}\n"
 
     leaders_str = ""
-    for l in dados_extracao.get("leaders", []):
-        leaders_str += f"  - [{l['layer']}] {l['tipo']}: {l['texto']}\n"
+    for l in dados_extracao.get("leaders", [])[:MAX_LEADERS]:
+        leaders_str += f"  - [{l['layer']}] {l['tipo']}: {_truncar(l.get('texto', ''), 80)}\n"
 
     textos_str = ""
-    for t in dados_extracao.get("textos", []):
-        textos_str += f"  - [{t['layer']}] ({t['disciplina']}): {t['texto']}\n"
+    for t in dados_extracao.get("textos", [])[:MAX_TEXTOS]:
+        textos_str += f"  - [{t['layer']}] ({t['disciplina']}): {_truncar(t.get('texto', ''), 80)}\n"
+
+    # Analise Estrutural (Node 1.2)
+    estrutural_str = ""
+    analise_estrutural = dados_extracao.get("analise_estrutural", {})
+    if analise_estrutural:
+        for e in analise_estrutural.get("elementos", []):
+            vol = f" | Volume: {e['volume_estimado']:.2f} m3" if e.get("volume_estimado") else ""
+            comp = f" | Comp: {e['comprimento_total']:.2f} m" if e.get("comprimento_total") else ""
+            area = f" | Area: {e['area_total']:.2f} m2" if e.get("area_total") else ""
+            estrutural_str += f"  - {e['tipo'].upper()}: {e['quantidade']} un{comp}{area}{vol}\n"
+
+        resumo_estr = analise_estrutural.get("resumo", {})
+        if resumo_estr:
+            estrutural_str += f"\n  Volume total de concreto: {resumo_estr.get('volume_total_concreto_m3', 0):.2f} m3\n"
+            estrutural_str += f"  Tipos encontrados: {', '.join(resumo_estr.get('tipos_encontrados', []))}\n"
+            ausentes = resumo_estr.get("tipos_ausentes", [])
+            if ausentes:
+                estrutural_str += f"  Tipos ausentes na planta: {', '.join(ausentes)}\n"
+
+        textos_estr = analise_estrutural.get("textos_estruturais", [])
+        if textos_estr:
+            estrutural_str += f"\n  Textos estruturais: {', '.join(textos_estr[:10])}\n"
+
+    estrutural_section = ""
+    if estrutural_str:
+        estrutural_section = f"""
+================================================================
+ANALISE ESTRUTURAL:
+================================================================
+{estrutural_str}
+"""
 
     normas_section = ""
     if normas_contexto:
+        normas_truncado = normas_contexto[:MAX_NORMAS]
         normas_section = f"""
 ================================================================
 CONTEXTO DE NORMAS TECNICAS RELEVANTES:
 ================================================================
-{normas_contexto}
+{normas_truncado}
 """
 
     prompt = f"""Com base nos dados extraidos da planta baixa DXF abaixo, \
@@ -131,6 +181,7 @@ ANOTACOES (LEADERS):
 TEXTOS DO DESENHO:
 ================================================================
 {textos_str if textos_str else '  Nenhum texto encontrado.'}
+{estrutural_section}
 {normas_section}
 Gere o Memorial Descritivo no formato JSON abaixo:
 {{

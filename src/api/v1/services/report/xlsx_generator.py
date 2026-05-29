@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.logger import log
+
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -636,7 +638,7 @@ def parse_ai_response(texto_ia: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    print(f"[XLSX] AVISO: nao foi possivel parsear resposta da IA ({len(texto)} chars)")
+    log.warn("XLSX", f"Nao foi possivel parsear resposta da IA ({len(texto)} chars)")
     return {"sheets": []}
 
 
@@ -786,7 +788,7 @@ def gerar_xlsx(ai_data: dict, arquivo_original: str = "N/A") -> str:
     nome_arquivo = f"{nome}_memorial_{ts}.xlsx"
     caminho = OUTPUT_DIR / nome_arquivo
     wb.save(str(caminho))
-    print(f"[XLSX] Arquivo gerado: {caminho} ({caminho.stat().st_size} bytes)")
+    log.success("XLSX", f"Arquivo gerado: {caminho} ({caminho.stat().st_size} bytes)")
     return str(caminho)
 
 
@@ -806,33 +808,33 @@ def gerar_relatorio_xlsx(
     Returns:
         Tupla (path do arquivo XLSX, revisao em Markdown).
     """
-    print(f"[XLSX] Iniciando geracao de relatorio XLSX...")
+    log.info("XLSX", "Iniciando geracao de relatorio XLSX...")
 
     # 1. Montar prompt
     user_prompt = build_xlsx_prompt(memorial_descritivo, dados_extracao, normas_contexto)
-    print(f"[XLSX] Prompt montado ({len(user_prompt)} chars)")
+    log.info("XLSX", f"Prompt montado ({len(user_prompt)} chars)")
 
     # 2. Chamar IA
-    print(f"[XLSX] Chamando OpenRouter...")
+    log.info("XLSX", "Chamando OpenRouter...")
     texto_ia = chamar_openrouter(SYSTEM_PROMPT_RELATORIO_XLSX, user_prompt)
-    print(f"[XLSX] IA retornou {len(texto_ia)} chars")
+    log.info("XLSX", f"IA retornou {len(texto_ia)} chars")
 
     # 3. Parsear resposta
     ai_data = parse_ai_response(texto_ia)
     sheets_count = len(ai_data.get("sheets", []))
-    print(f"[XLSX] Resposta parseada: {sheets_count} abas")
+    log.info("XLSX", f"Resposta parseada: {sheets_count} abas")
 
     # 4. Gerar XLSX
     caminho = gerar_xlsx(ai_data, arquivo_original)
 
     # 5. Gerar revisao da IA
-    print(f"[XLSX] Gerando revisao da IA...")
+    log.info("XLSX", "Gerando revisao da IA...")
     try:
         revisao_prompt = build_xlsx_revisao_prompt(memorial_descritivo, ai_data)
         revisao_md = chamar_openrouter(SYSTEM_PROMPT_REVISAO_RELATORIO, revisao_prompt)
-        print(f"[XLSX] Revisao gerada ({len(revisao_md)} chars)")
+        log.success("XLSX", f"Revisao gerada ({len(revisao_md)} chars)")
     except Exception as e:
-        print(f"[XLSX] AVISO: falha ao gerar revisao: {e}")
+        log.warn("XLSX", f"Falha ao gerar revisao: {e}")
         revisao_md = f"## Revisao indisponivel\n\nErro ao gerar revisao: {str(e)}"
 
     return caminho, revisao_md

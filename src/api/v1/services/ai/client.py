@@ -6,6 +6,7 @@ from __future__ import annotations
 import httpx
 
 from src.config import OPENROUTER_API_KEY, OPENROUTER_MODEL, OPENROUTER_TEMPERATURE
+from src.logger import log
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -46,7 +47,7 @@ def chamar_openrouter(system_prompt: str, user_prompt: str) -> str:
     choice = data["choices"][0]
     finish_reason = choice.get("finish_reason", "")
     if finish_reason == "length":
-        print("[OpenRouter] AVISO: Resposta truncada por limite de tokens (max_tokens muito baixo)")
+        log.warn("OPENROUTER", "Resposta truncada por limite de tokens (max_tokens muito baixo)")
 
     content = choice["message"]["content"]
     if not content or not content.strip():

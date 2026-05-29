@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from src.logger import log
+
 
 def extrair_texto_report(file_path: str, file_type: str, title: str = "") -> str:
     """
@@ -23,11 +25,11 @@ def extrair_texto_report(file_path: str, file_type: str, title: str = "") -> str
         Texto extraido ou descricao do arquivo se nao conseguir extrair
     """
     if not file_path:
-        print(f"[REPORT_EXTRACT] Caminho vazio para report: {title}")
+        log.warn("REPORT_EXTRACT", f"Caminho vazio para report: {title}")
         return f"[Report: {title or 'sem titulo'} ({file_type}) - caminho vazio]"
 
     exists = os.path.exists(file_path)
-    print(f"[REPORT_EXTRACT] Report: {title} | file_type: {file_type} | file_path: {file_path} | exists: {exists}")
+    log.info("REPORT_EXTRACT", f"Report: {title} | file_type: {file_type} | file_path: {file_path} | exists: {exists}")
 
     if not exists:
         return f"[Report: {title or 'sem titulo'} ({file_type}) - arquivo nao encontrado]"

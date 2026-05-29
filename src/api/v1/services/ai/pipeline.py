@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.api.v1.services.ai.client import chamar_openrouter
+from src.logger import log
 from src.api.v1.services.ai.prompts import (
     SYSTEM_PROMPT_AUDITOR,
     SYSTEM_PROMPT_RELATORIO_MD,
@@ -130,7 +131,7 @@ def _node_llm_analysis(
 def _node_parse_response(raw_text: str) -> dict[str, Any]:
     """Tenta parsear o JSON retornado pelo LLM com fallback."""
     if not raw_text or not raw_text.strip():
-        print("[PARSE] ERRO: Resposta vazia do LLM")
+        log.error("PARSE", "Resposta vazia do LLM")
         return _build_fallback_memorial("LLM retornou resposta vazia")
 
     # Tentar 1: JSON puro
@@ -184,13 +185,13 @@ def _node_parse_response(raw_text: str) -> dict[str, Any]:
             fragment += ']' * open_brackets + '}' * open_braces
             try:
                 result = json.loads(fragment)
-                print("[PARSE] AVISO: JSON truncado foi recuperado com sucesso")
+                log.warn("PARSE", "JSON truncado foi recuperado com sucesso")
                 return result
             except json.JSONDecodeError:
                 pass
 
     # Fallback: retornar memorial basico com dados da resposta bruta
-    print(f"[PARSE] AVISO: Nao foi possivel parsear JSON. Resposta: {raw_text[:200]}...")
+    log.warn("PARSE", f"Nao foi possivel parsear JSON. Resposta: {raw_text[:200]}...")
     return _build_fallback_memorial(f"Resposta do LLM nao e JSON valido: {raw_text[:500]}")
 
 
@@ -407,18 +408,17 @@ def executar_analise_dxf(
     Retorna os JSONs (bruto + tratado) sem gerar relatórios.
     """
     start_time = time.time()
-    print(f"\n{'='*60}")
-    print(f"[EXTRACT] Inicio - arquivo: {filename}")
-    print(f"{'='*60}")
+    log.separator("EXTRACT")
+    log.info("EXTRACT", f"Inicio - arquivo: {filename}")
 
     try:
         # No 1: Extracao deterministica
-        print(f"[EXTRACT] No 1 - Extraindo dados do DXF...")
+        log.step("EXTRACT", "1", "Extraindo dados do DXF...")
         dados = _node_extraction(filename, content, options)
-        print(f"[EXTRACT] No 1 - Extracao concluida: {dados.total_entidades} entidades")
+        log.success("EXTRACT", f"No 1 - Extracao concluida: {dados.total_entidades} entidades")
 
         if dados.total_entidades == 0:
-            print(f"[EXTRACT] ERRO: Nenhuma entidade encontrada no arquivo DXF")
+            log.error("EXTRACT", "Nenhuma entidade encontrada no arquivo DXF")
             return {
                 "sucesso": False,
                 "erro": "Nenhuma entidade encontrada no arquivo DXF.",
@@ -427,11 +427,11 @@ def executar_analise_dxf(
             }
 
         # No 1.2: Analise Estrutural
-        print(f"[EXTRACT] No 1.2 - Analisando elementos estruturais...")
+        log.step("EXTRACT", "1.2", "Analisando elementos estruturais...")
         analise_estrutural = analisar_estrutural(dados)
         n_estruturais = analise_estrutural["resumo"]["total_elementos_estruturais"]
         vol_concreto = analise_estrutural["resumo"]["volume_total_concreto_m3"]
-        print(f"[EXTRACT] No 1.2 - Estrutural: {n_estruturais} elementos, {vol_concreto} m3 de concreto")
+        log.success("EXTRACT", f"No 1.2 - Estrutural: {n_estruturais} elementos, {vol_concreto} m3 de concreto")
 
         # Montar dict com dados de extracao + analise estrutural
         dados_dict = dados.model_dump(mode="json")
@@ -441,31 +441,31 @@ def executar_analise_dxf(
         normas_contexto = ""
         try:
             query = _build_rag_query(dados)
-            print(f"[EXTRACT] No 1.5 - Buscando normas no RAG (query: {query[:80]})")
+            log.step("EXTRACT", "1.5", f"Buscando normas no RAG (query: {query[:80]})")
             normas_contexto = buscar_normas_relevantes(query=query, k=5)
             if normas_contexto:
                 trechos = normas_contexto.split("\n\n---\n\n")
-                print(f"[EXTRACT] No 1.5 - RAG: {len(trechos)} trechos encontrados:")
+                log.success("EXTRACT", f"No 1.5 - RAG: {len(trechos)} trechos encontrados:")
                 for i, trecho in enumerate(trechos, 1):
                     primeira_linha = trecho.split("\n")[0][:120]
-                    print(f"[EXTRACT] No 1.5 - RAG   [{i}] {primeira_linha}")
+                    log.info("EXTRACT", f"No 1.5 - RAG   [{i}] {primeira_linha}")
             else:
-                print(f"[EXTRACT] No 1.5 - RAG: nenhuma norma encontrada")
+                log.warn("EXTRACT", "No 1.5 - RAG: nenhuma norma encontrada")
         except Exception as rag_err:
-            print(f"[EXTRACT] No 1.5 - RAG indisponivel: {rag_err}")
+            log.warn("EXTRACT", f"No 1.5 - RAG indisponivel: {rag_err}")
 
         # No 2: Analise via LLM
-        print(f"[EXTRACT] No 2 - Enviando para LLM (OpenRouter)...")
+        log.step("EXTRACT", "2", "Enviando para LLM (OpenRouter)...")
         raw_response = _node_llm_analysis(dados, normas_contexto, dados_dict_override=dados_dict)
-        print(f"[EXTRACT] No 2 - LLM analise concluida ({len(raw_response)} chars)")
+        log.success("EXTRACT", f"No 2 - LLM analise concluida ({len(raw_response)} chars)")
 
         # No 3: Parse da resposta
-        print(f"[EXTRACT] No 3 - Parseando resposta JSON...")
+        log.step("EXTRACT", "3", "Parseando resposta JSON...")
         memorial = _node_parse_response(raw_response)
-        print(f"[EXTRACT] No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
+        log.success("EXTRACT", f"No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
 
         elapsed = time.time() - start_time
-        print(f"[EXTRACT] Concluido com sucesso em {elapsed:.1f}s")
+        log.success("EXTRACT", f"Concluido com sucesso em {elapsed:.1f}s")
 
         return {
             "sucesso": True,
@@ -477,7 +477,7 @@ def executar_analise_dxf(
 
     except Exception as e:
         elapsed = time.time() - start_time
-        print(f"[EXTRACT] ERRO apos {elapsed:.1f}s: {str(e)}")
+        log.error("EXTRACT", f"Falha apos {elapsed:.1f}s: {str(e)}")
         return {
             "sucesso": False,
             "erro": str(e),
@@ -500,16 +500,15 @@ def executar_pipeline_memorial(
     Extracao -> RAG -> LLM -> Parse -> Montagem -> Revisao
     """
     start_time = time.time()
-    print(f"\n{'='*60}")
-    print(f"[PIPELINE] Inicio - arquivo: {filename}")
-    print(f"{'='*60}")
+    log.separator("PIPELINE")
+    log.info("PIPELINE", f"Inicio - arquivo: {filename}")
 
     try:
 
         # No 1: Extracao deterministica
-        print(f"[PIPELINE] No 1 - Extraindo dados do DXF...")
+        log.step("PIPELINE", "1", "Extraindo dados do DXF...")
         dados = _node_extraction(filename, content, options)
-        print(f"[PIPELINE] No 1 - Extracao concluida: {dados.total_entidades} entidades")
+        log.success("PIPELINE", f"No 1 - Extracao concluida: {dados.total_entidades} entidades")
 
         if dados.total_entidades == 0:
             return {
@@ -520,11 +519,11 @@ def executar_pipeline_memorial(
             }
 
         # No 1.2: Analise Estrutural
-        print(f"[PIPELINE] No 1.2 - Analisando elementos estruturais...")
+        log.step("PIPELINE", "1.2", "Analisando elementos estruturais...")
         analise_estrutural = analisar_estrutural(dados)
         n_estruturais = analise_estrutural["resumo"]["total_elementos_estruturais"]
         vol_concreto = analise_estrutural["resumo"]["volume_total_concreto_m3"]
-        print(f"[PIPELINE] No 1.2 - Estrutural: {n_estruturais} elementos, {vol_concreto} m3 de concreto")
+        log.success("PIPELINE", f"No 1.2 - Estrutural: {n_estruturais} elementos, {vol_concreto} m3 de concreto")
 
         # Montar dict com dados de extracao + analise estrutural
         dados_dict = dados.model_dump(mode="json")
@@ -534,27 +533,27 @@ def executar_pipeline_memorial(
         normas_contexto = ""
         try:
             query = _build_rag_query(dados)
-            print(f"[PIPELINE] No 1.5 - Buscando normas no RAG (query: {query[:80]}...)")
+            log.step("PIPELINE", "1.5", f"Buscando normas no RAG (query: {query[:80]}...)")
             normas_contexto = buscar_normas_relevantes(query=query, k=5)
-            print(f"[PIPELINE] No 1.5 - RAG: {len(normas_contexto)} chars de normas encontradas")
+            log.success("PIPELINE", f"No 1.5 - RAG: {len(normas_contexto)} chars de normas encontradas")
         except Exception as rag_err:
-            print(f"[PIPELINE] No 1.5 - RAG indisponivel: {rag_err}")
+            log.warn("PIPELINE", f"No 1.5 - RAG indisponivel: {rag_err}")
 
         # No 2: Analise via LLM
-        print(f"[PIPELINE] No 2 - Enviando para LLM (OpenRouter)...")
+        log.step("PIPELINE", "2", "Enviando para LLM (OpenRouter)...")
         raw_response = _node_llm_analysis(dados, normas_contexto, dados_dict_override=dados_dict)
-        print(f"[PIPELINE] No 2 - LLM analise concluida ({len(raw_response)} chars)")
+        log.success("PIPELINE", f"No 2 - LLM analise concluida ({len(raw_response)} chars)")
 
         # No 3: Parse da resposta
-        print(f"[PIPELINE] No 3 - Parseando resposta JSON...")
+        log.step("PIPELINE", "3", "Parseando resposta JSON...")
         memorial = _node_parse_response(raw_response)
-        print(f"[PIPELINE] No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
+        log.success("PIPELINE", f"No 3 - Parse concluido: confianca={memorial.get('confianca_analise', 'N/A')}")
 
         # No 4: Montagem + relatorios (via IA)
-        print(f"[PIPELINE] No 4 - Gerando relatorios MD e PDF via IA...")
+        log.step("PIPELINE", "4", "Gerando relatorios MD e PDF via IA...")
         resultado = _node_assembly(memorial, dados, raw_response, normas_contexto)
-        print(f"[PIPELINE] No 4 - MD gerado: {resultado.get('relatorio_md', 'falhou')}")
-        print(f"[PIPELINE] No 4 - PDF gerado: {resultado.get('relatorio_pdf', 'falhou')}")
+        log.success("PIPELINE", f"No 4 - MD gerado: {resultado.get('relatorio_md', 'falhou')}")
+        log.success("PIPELINE", f"No 4 - PDF gerado: {resultado.get('relatorio_pdf', 'falhou')}")
 
         # No 5: Revisao do relatorio (max 3 tentativas)
         MAX_TENTATIVAS = 3
@@ -564,9 +563,9 @@ def executar_pipeline_memorial(
         dados_dict["analise_estrutural"] = analise_estrutural
 
         for tentativa in range(MAX_TENTATIVAS):
-            print(f"[PIPELINE] No 5 - Revisao tentativa {tentativa + 1}/{MAX_TENTATIVAS}...")
+            log.step("PIPELINE", "5", f"Revisao tentativa {tentativa + 1}/{MAX_TENTATIVAS}...")
             revisao = _node_review(memorial, resultado.get("relatorio_md"))
-            print(f"[PIPELINE] No 5 - Revisao: {revisao.get('status', 'N/A')}")
+            log.info("PIPELINE", f"No 5 - Revisao: {revisao.get('status', 'N/A')}")
 
             if revisao.get("status") == "CORRETO":
                 break
@@ -597,12 +596,12 @@ def executar_pipeline_memorial(
         resultado["analise_estrutural"] = analise_estrutural
 
         elapsed = time.time() - start_time
-        print(f"[PIPELINE] Concluido com sucesso em {elapsed:.1f}s")
+        log.success("PIPELINE", f"Concluido com sucesso em {elapsed:.1f}s")
         return resultado
 
     except Exception as e:
         elapsed = time.time() - start_time
-        print(f"[PIPELINE] ERRO apos {elapsed:.1f}s: {str(e)}")
+        log.error("PIPELINE", f"Falha apos {elapsed:.1f}s: {str(e)}")
         return {
             "sucesso": False,
             "erro": str(e),

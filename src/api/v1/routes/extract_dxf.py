@@ -1,7 +1,7 @@
 import asyncio
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
 from src.api.v1.schemas.dxf_schemas import DXFExtractRequest, DXFExtractResponse
@@ -12,6 +12,7 @@ from src.api.v1.services.extract_dxf_service import (
 )
 from src.api.v1.services.ai.pipeline import executar_analise_dxf
 from src.api.v1.services.ai.client import chamar_openrouter
+from src.api.v1.services.callback import enviar_callback
 from src.api.v1.dependencies import verify_api_key
 from src.config import OPENROUTER_MODEL
 
@@ -97,16 +98,47 @@ async def ai_health_check():
 # POST /v1/extract/dxf — Pipeline completo COM IA
 # ---------------------------------------------------------------------------
 
+def _process_pipeline_background(callback_url: str, filename: str, content: bytes, options: DXFExtractRequest, file_id: int | None):
+    """Processa pipeline em background e envia resultado via callback."""
+    from src.logger import log
+    try:
+        resultado = executar_analise_dxf(filename=filename, content=content, options=options)
+        enviar_callback(callback_url, {
+            "file_id": file_id,
+            "sucesso": resultado.get("sucesso", False),
+            "memorial_descritivo": resultado.get("memorial_descritivo"),
+            "dados_extracao": resultado.get("dados_extracao"),
+            "confianca": resultado.get("confianca"),
+            "num_inconsistencias": resultado.get("num_inconsistencias"),
+            "erro": resultado.get("erro"),
+        })
+    except Exception as e:
+        log.error("PIPELINE", f"Erro no background: {e}")
+        try:
+            enviar_callback(callback_url, {"file_id": file_id, "sucesso": False, "erro": str(e)})
+        except Exception:
+            pass
+
+
 @router.post(
     "/extract/dxf",
-    response_model=MemorialResponse,
     summary="Extracao + RAG + LLM: extrai DXF e gera JSONs (sem relatorios)",
 )
 async def extract_dxf_memorial(
     file: Annotated[UploadFile, File(..., description="Arquivo DXF para extracao")],
     payload: Annotated[DXFExtractRequest, Depends(DXFExtractRequest.as_form)],
-) -> MemorialResponse:
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    callback_url: str | None = Header(None, alias="X-Callback-URL"),
+    file_id: int | None = Header(None, alias="X-File-ID"),
+):
     content = await _validate_and_read(file)
+
+    if callback_url:
+        # Modo assincrono: processar em background e retornar 202
+        background_tasks.add_task(_process_pipeline_background, callback_url, file.filename, content, payload, file_id)
+        return {"status": "processando", "mensagem": "Processamento iniciado"}
+
+    # Modo sincrono (fallback/compatibilidade)
     try:
         resultado = await asyncio.to_thread(
             executar_analise_dxf,

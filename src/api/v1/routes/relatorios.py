@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ from src.api.v1.services.ai.prompts import (
 from src.api.v1.services.report.pdf_generator import gerar_pdf_de_texto
 from src.api.v1.services.report.xlsx_generator import gerar_relatorio_xlsx
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
+from src.api.v1.services.callback import enviar_callback
 
 router = APIRouter()
 
@@ -172,28 +173,23 @@ def _build_json_response(caminho: str, revisao: str, media_type: str) -> JSONRes
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post(
-    "/relatorios/markdown",
-    summary="Gerar relatorio Markdown via IA",
-    description="Gera um relatorio Markdown completo usando IA, com base no memorial descritivo e dados de extracao.",
-)
 def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de Markdown (RAG + LLM + arquivo + revisao)."""
     start_time = time.time()
-    log.separator("RELATORIO")
-    log.info("RELATORIO", f"Gerando Markdown via IA - arquivo: {req.arquivo_original}")
+    log.separator("MD")
+    log.info("MD", f"Gerando Markdown via IA - arquivo: {req.arquivo_original}")
 
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
-        log.info("RELATORIO", f"RAG: buscando normas (query: {query[:100]})")
+        log.info("MD", f"RAG: buscando normas (query: {query[:100]})")
         normas_contexto = buscar_normas_relevantes(query=query, k=5)
         _log_rag_resultados(normas_contexto)
     except Exception as rag_err:
-        log.warn("RELATORIO", f"RAG indisponivel: {rag_err}")
+        log.warn("MD", f"RAG indisponivel: {rag_err}")
 
     try:
-        log.info("RELATORIO", "Enviando para IA (geracao de MD)...")
+        log.info("MD", "Enviando para IA (geracao de MD)...")
         conteudo = gerar_relatorio_ia(
             tipo="md",
             dados_extracao=req.dados_extracao,
@@ -213,52 +209,64 @@ def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTask
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
-        log.success("RELATORIO", f"Markdown gerado com sucesso em {elapsed:.1f}s: {caminho}")
+        log.success("MD", f"Markdown gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
         return _build_json_response(str(caminho), revisao, "text/markdown")
     except Exception as e:
         elapsed = time.time() - start_time
-        log.error("RELATORIO", f"Erro ao gerar Markdown apos {elapsed:.1f}s: {str(e)}")
+        log.error("MD", f"Erro ao gerar Markdown apos {elapsed:.1f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio Markdown: {str(e)}",
         )
 
 
-async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks):
+@router.post(
+    "/relatorios/markdown",
+    summary="Gerar relatorio Markdown via IA",
+    description="Gera um relatorio Markdown completo usando IA, com base no memorial descritivo e dados de extracao.",
+)
+async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks, callback_url: str | None = Header(None, alias="X-Callback-URL"), report_id: int | None = Header(None, alias="X-Report-ID")):
     """Gera relatorio Markdown via IA e retorna JSON com report (base64) + review."""
+    if callback_url:
+        def _bg():
+            try:
+                resp = _gerar_markdown_sync(req, background_tasks)
+                body = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+                import json
+                data = json.loads(body) if isinstance(body, str) else body
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": True, "report_base64": data.get("report"), "review": data.get("review")})
+            except Exception as e:
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": False, "erro": str(e)})
+        asyncio.create_task(asyncio.to_thread(_bg))
+        return {"status": "gerando", "report_id": report_id}
     return await asyncio.to_thread(_gerar_markdown_sync, req, background_tasks)
 
 
-@router.post(
-    "/relatorios/pdf",
-    summary="Gerar relatorio PDF via IA",
-    description="Gera um relatorio PDF profissional usando IA, com base no memorial descritivo e dados de extracao.",
-)
 def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de PDF (RAG + LLM + PDF + revisao)."""
     start_time = time.time()
-    log.separator("RELATORIO")
-    log.info("RELATORIO", f"Gerando PDF via IA - arquivo: {req.arquivo_original}")
+    log.separator("PDF")
+    log.info("PDF", f"Gerando PDF via IA - arquivo: {req.arquivo_original}")
 
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
-        log.info("RELATORIO", f"RAG: buscando normas (query: {query[:100]})")
+        log.info("PDF", f"RAG: buscando normas (query: {query[:100]})")
         normas_contexto = buscar_normas_relevantes(query=query, k=5)
         _log_rag_resultados(normas_contexto)
     except Exception as rag_err:
-        log.warn("RELATORIO", f"RAG indisponivel: {rag_err}")
+        log.warn("PDF", f"RAG indisponivel: {rag_err}")
 
     try:
-        log.info("RELATORIO", "Enviando para IA (geracao de texto para PDF)...")
+        log.info("PDF", "Enviando para IA (geracao de texto para PDF)...")
         texto_ia = gerar_relatorio_ia(
             tipo="pdf",
             dados_extracao=req.dados_extracao,
             memorial_descritivo=req.memorial_descritivo,
             normas_contexto=normas_contexto,
         )
-        log.info("RELATORIO", f"IA retornou {len(texto_ia)} chars, convertendo para PDF...")
+        log.info("PDF", f"IA retornou {len(texto_ia)} chars, convertendo para PDF...")
 
         caminho = gerar_pdf_de_texto(texto_ia, req.arquivo_original)
 
@@ -267,45 +275,57 @@ def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
-        log.success("RELATORIO", f"PDF gerado com sucesso em {elapsed:.1f}s: {caminho}")
+        log.success("PDF", f"PDF gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
         return _build_json_response(caminho, revisao, "application/pdf")
     except Exception as e:
         elapsed = time.time() - start_time
-        log.error("RELATORIO", f"Erro ao gerar PDF apos {elapsed:.1f}s: {str(e)}")
+        log.error("PDF", f"Erro ao gerar PDF apos {elapsed:.1f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio PDF: {str(e)}",
         )
 
 
-async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks):
+@router.post(
+    "/relatorios/pdf",
+    summary="Gerar relatorio PDF via IA",
+    description="Gera um relatorio PDF profissional usando IA, com base no memorial descritivo e dados de extracao.",
+)
+async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks, callback_url: str | None = Header(None, alias="X-Callback-URL"), report_id: int | None = Header(None, alias="X-Report-ID")):
     """Gera relatorio PDF via IA e retorna JSON com report (base64) + review."""
+    if callback_url:
+        def _bg():
+            try:
+                resp = _gerar_pdf_sync(req, background_tasks)
+                body = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+                import json
+                data = json.loads(body) if isinstance(body, str) else body
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": True, "report_base64": data.get("report"), "review": data.get("review")})
+            except Exception as e:
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": False, "erro": str(e)})
+        asyncio.create_task(asyncio.to_thread(_bg))
+        return {"status": "gerando", "report_id": report_id}
     return await asyncio.to_thread(_gerar_pdf_sync, req, background_tasks)
 
 
-@router.post(
-    "/relatorios/xlsx",
-    summary="Gerar relatorio XLSX via IA",
-    description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
-)
 def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de XLSX (RAG + LLM + XLSX + revisao)."""
     start_time = time.time()
-    log.separator("RELATORIO")
-    log.info("RELATORIO", f"Gerando XLSX via IA - arquivo: {req.arquivo_original}")
+    log.separator("XLSX")
+    log.info("XLSX", f"Gerando XLSX via IA - arquivo: {req.arquivo_original}")
 
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
-        log.info("RELATORIO", f"RAG: buscando normas (query: {query[:100]})")
+        log.info("XLSX", f"RAG: buscando normas (query: {query[:100]})")
         normas_contexto = buscar_normas_relevantes(query=query, k=5)
         _log_rag_resultados(normas_contexto)
     except Exception as rag_err:
-        log.warn("RELATORIO", f"RAG indisponivel: {rag_err}")
+        log.warn("XLSX", f"RAG indisponivel: {rag_err}")
 
     try:
-        log.info("RELATORIO", "Enviando para IA (geracao de XLSX)...")
+        log.info("XLSX", "Enviando para IA (geracao de XLSX)...")
         caminho, revisao = gerar_relatorio_xlsx(
             memorial_descritivo=req.memorial_descritivo,
             dados_extracao=req.dados_extracao,
@@ -316,18 +336,35 @@ def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
-        log.success("RELATORIO", f"XLSX gerado com sucesso em {elapsed:.1f}s: {caminho}")
+        log.success("XLSX", f"XLSX gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
         return _build_json_response(caminho, revisao, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         elapsed = time.time() - start_time
-        log.error("RELATORIO", f"Erro ao gerar XLSX apos {elapsed:.1f}s: {str(e)}")
+        log.error("XLSX", f"Erro ao gerar XLSX apos {elapsed:.1f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio XLSX: {str(e)}",
         )
 
 
-async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks):
+@router.post(
+    "/relatorios/xlsx",
+    summary="Gerar relatorio XLSX via IA",
+    description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
+)
+async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks, callback_url: str | None = Header(None, alias="X-Callback-URL"), report_id: int | None = Header(None, alias="X-Report-ID")):
     """Gera relatorio XLSX via IA e retorna JSON com report (base64) + review."""
+    if callback_url:
+        def _bg():
+            try:
+                resp = _gerar_xlsx_sync(req, background_tasks)
+                body = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+                import json
+                data = json.loads(body) if isinstance(body, str) else body
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": True, "report_base64": data.get("report"), "review": data.get("review")})
+            except Exception as e:
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": False, "erro": str(e)})
+        asyncio.create_task(asyncio.to_thread(_bg))
+        return {"status": "gerando", "report_id": report_id}
     return await asyncio.to_thread(_gerar_xlsx_sync, req, background_tasks)

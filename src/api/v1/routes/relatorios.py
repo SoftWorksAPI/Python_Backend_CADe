@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ from src.api.v1.services.ai.prompts import (
 from src.api.v1.services.report.pdf_generator import gerar_pdf_de_texto
 from src.api.v1.services.report.xlsx_generator import gerar_relatorio_xlsx
 from src.api.v1.services.rag.retriever import buscar_normas_relevantes
+from src.api.v1.services.callback import enviar_callback
 
 router = APIRouter()
 
@@ -172,11 +173,6 @@ def _build_json_response(caminho: str, revisao: str, media_type: str) -> JSONRes
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post(
-    "/relatorios/markdown",
-    summary="Gerar relatorio Markdown via IA",
-    description="Gera um relatorio Markdown completo usando IA, com base no memorial descritivo e dados de extracao.",
-)
 def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de Markdown (RAG + LLM + arquivo + revisao)."""
     start_time = time.time()
@@ -225,16 +221,28 @@ def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTask
         )
 
 
-async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks):
+@router.post(
+    "/relatorios/markdown",
+    summary="Gerar relatorio Markdown via IA",
+    description="Gera um relatorio Markdown completo usando IA, com base no memorial descritivo e dados de extracao.",
+)
+async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks, callback_url: str | None = Header(None, alias="X-Callback-URL"), report_id: int | None = Header(None, alias="X-Report-ID")):
     """Gera relatorio Markdown via IA e retorna JSON com report (base64) + review."""
+    if callback_url:
+        def _bg():
+            try:
+                resp = _gerar_markdown_sync(req, background_tasks)
+                body = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+                import json
+                data = json.loads(body) if isinstance(body, str) else body
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": True, "report_base64": data.get("report"), "review": data.get("review")})
+            except Exception as e:
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": False, "erro": str(e)})
+        asyncio.create_task(asyncio.to_thread(_bg))
+        return {"status": "gerando", "report_id": report_id}
     return await asyncio.to_thread(_gerar_markdown_sync, req, background_tasks)
 
 
-@router.post(
-    "/relatorios/pdf",
-    summary="Gerar relatorio PDF via IA",
-    description="Gera um relatorio PDF profissional usando IA, com base no memorial descritivo e dados de extracao.",
-)
 def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de PDF (RAG + LLM + PDF + revisao)."""
     start_time = time.time()
@@ -279,16 +287,28 @@ def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
         )
 
 
-async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks):
+@router.post(
+    "/relatorios/pdf",
+    summary="Gerar relatorio PDF via IA",
+    description="Gera um relatorio PDF profissional usando IA, com base no memorial descritivo e dados de extracao.",
+)
+async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks, callback_url: str | None = Header(None, alias="X-Callback-URL"), report_id: int | None = Header(None, alias="X-Report-ID")):
     """Gera relatorio PDF via IA e retorna JSON com report (base64) + review."""
+    if callback_url:
+        def _bg():
+            try:
+                resp = _gerar_pdf_sync(req, background_tasks)
+                body = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+                import json
+                data = json.loads(body) if isinstance(body, str) else body
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": True, "report_base64": data.get("report"), "review": data.get("review")})
+            except Exception as e:
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": False, "erro": str(e)})
+        asyncio.create_task(asyncio.to_thread(_bg))
+        return {"status": "gerando", "report_id": report_id}
     return await asyncio.to_thread(_gerar_pdf_sync, req, background_tasks)
 
 
-@router.post(
-    "/relatorios/xlsx",
-    summary="Gerar relatorio XLSX via IA",
-    description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
-)
 def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de XLSX (RAG + LLM + XLSX + revisao)."""
     start_time = time.time()
@@ -328,6 +348,23 @@ def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
         )
 
 
-async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks):
+@router.post(
+    "/relatorios/xlsx",
+    summary="Gerar relatorio XLSX via IA",
+    description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
+)
+async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks, callback_url: str | None = Header(None, alias="X-Callback-URL"), report_id: int | None = Header(None, alias="X-Report-ID")):
     """Gera relatorio XLSX via IA e retorna JSON com report (base64) + review."""
+    if callback_url:
+        def _bg():
+            try:
+                resp = _gerar_xlsx_sync(req, background_tasks)
+                body = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+                import json
+                data = json.loads(body) if isinstance(body, str) else body
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": True, "report_base64": data.get("report"), "review": data.get("review")})
+            except Exception as e:
+                enviar_callback(callback_url, {"report_id": report_id, "sucesso": False, "erro": str(e)})
+        asyncio.create_task(asyncio.to_thread(_bg))
+        return {"status": "gerando", "report_id": report_id}
     return await asyncio.to_thread(_gerar_xlsx_sync, req, background_tasks)

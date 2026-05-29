@@ -1,6 +1,8 @@
 """
 Rotas para gerenciamento do RAG de normas tecnicas.
 """
+import asyncio
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -33,7 +35,7 @@ router = APIRouter()
     dependencies=[Depends(verify_api_key)],
 )
 async def rag_sync() -> SyncResponse:
-    resultado = sincronizar_normas()
+    resultado = await asyncio.to_thread(sincronizar_normas)
     return SyncResponse(**resultado)
 
 
@@ -44,7 +46,7 @@ async def rag_sync() -> SyncResponse:
     dependencies=[Depends(verify_api_key)],
 )
 async def rag_health():
-    return status_vectorstore()
+    return await asyncio.to_thread(status_vectorstore)
 
 
 @router.delete(
@@ -54,4 +56,4 @@ async def rag_health():
     dependencies=[Depends(verify_api_key)],
 )
 async def rag_clear():
-    return limpar_vectorstore()
+    return await asyncio.to_thread(limpar_vectorstore)

@@ -4,6 +4,7 @@ Configuracao e inicializacao do ChromaDB para armazenamento vetorial de normas.
 from __future__ import annotations
 
 import shutil
+import threading
 from pathlib import Path
 
 import chromadb
@@ -13,11 +14,19 @@ from src.config import CHROMA_PERSIST_PATH
 COLLECTION_NAME = "normas_tecnicas"
 _persist_path = Path(CHROMA_PERSIST_PATH).resolve()
 
+_client: chromadb.ClientAPI | None = None
+_client_lock = threading.Lock()
+
 
 def _get_client() -> chromadb.ClientAPI:
-    """Retorna cliente ChromaDB persistente."""
-    _persist_path.mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(path=str(_persist_path))
+    """Retorna cliente ChromaDB persistente (singleton)."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _persist_path.mkdir(parents=True, exist_ok=True)
+                _client = chromadb.PersistentClient(path=str(_persist_path))
+    return _client
 
 
 def get_vectorstore():
@@ -58,8 +67,10 @@ def buscar_chunks(query: str, k: int = 5) -> list[dict]:
 
 def limpar_vectorstore() -> dict:
     """Remove todos os dados do ChromaDB."""
+    global _client
     if _persist_path.exists():
         shutil.rmtree(_persist_path)
+    _client = None
     return {"ok": True, "mensagem": "ChromaDB limpo com sucesso."}
 
 

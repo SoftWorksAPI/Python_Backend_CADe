@@ -3,6 +3,7 @@ Rota de chat IA para perguntas sobre projetos processados.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -50,7 +51,8 @@ async def chat_endpoint(req: ChatRequest) -> ChatResponse:
     if req.historico:
         historico_dicts = [msg.model_dump() for msg in req.historico]
 
-    resultado = responder_pergunta_chat(
+    resultado = await asyncio.to_thread(
+        responder_pergunta_chat,
         pergunta=req.pergunta,
         json_cru=req.json_cru,
         json_tratado=req.json_tratado,

@@ -7,6 +7,7 @@ Retornam JSON com { report: base64, review: markdown }.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 from pathlib import Path
@@ -175,12 +176,11 @@ def _build_json_response(caminho: str, revisao: str, media_type: str) -> JSONRes
     summary="Gerar relatorio Markdown via IA",
     description="Gera um relatorio Markdown completo usando IA, com base no memorial descritivo e dados de extracao.",
 )
-async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks):
-    """Gera relatorio Markdown via IA e retorna JSON com report (base64) + review."""
+def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Corpo sync da geracao de Markdown (RAG + LLM + arquivo + revisao)."""
     start_time = time.time()
     print(f"\n[RELATORIO] Gerando Markdown via IA - arquivo: {req.arquivo_original}")
 
-    # Buscar contexto RAG com query rica
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
@@ -199,7 +199,6 @@ async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: Back
             normas_contexto=normas_contexto,
         )
 
-        # Salvar arquivo
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         nome = Path(req.arquivo_original).stem
@@ -207,10 +206,8 @@ async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: Back
         caminho = OUTPUT_DIR / nome_arquivo
         caminho.write_text(conteudo, encoding="utf-8")
 
-        # Gerar revisao da IA
         revisao = _gerar_revisao_ia(req.memorial_descritivo, "Markdown", conteudo)
 
-        # Deletar apos envio
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
@@ -226,17 +223,21 @@ async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: Back
         )
 
 
+async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Gera relatorio Markdown via IA e retorna JSON com report (base64) + review."""
+    return await asyncio.to_thread(_gerar_markdown_sync, req, background_tasks)
+
+
 @router.post(
     "/relatorios/pdf",
     summary="Gerar relatorio PDF via IA",
     description="Gera um relatorio PDF profissional usando IA, com base no memorial descritivo e dados de extracao.",
 )
-async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks):
-    """Gera relatorio PDF via IA e retorna JSON com report (base64) + review."""
+def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Corpo sync da geracao de PDF (RAG + LLM + PDF + revisao)."""
     start_time = time.time()
     print(f"\n[RELATORIO] Gerando PDF via IA - arquivo: {req.arquivo_original}")
 
-    # Buscar contexto RAG com query rica
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
@@ -258,10 +259,8 @@ async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: Backgroun
 
         caminho = gerar_pdf_de_texto(texto_ia, req.arquivo_original)
 
-        # Gerar revisao da IA
         revisao = _gerar_revisao_ia(req.memorial_descritivo, "PDF", texto_ia)
 
-        # Deletar apos envio
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
@@ -277,17 +276,21 @@ async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: Backgroun
         )
 
 
+async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Gera relatorio PDF via IA e retorna JSON com report (base64) + review."""
+    return await asyncio.to_thread(_gerar_pdf_sync, req, background_tasks)
+
+
 @router.post(
     "/relatorios/xlsx",
     summary="Gerar relatorio XLSX via IA",
     description="Gera um relatorio XLSX (memorial descritivo com 15 abas) usando IA, com base no memorial descritivo e dados de extracao.",
 )
-async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks):
-    """Gera relatorio XLSX via IA e retorna JSON com report (base64) + review."""
+def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Corpo sync da geracao de XLSX (RAG + LLM + XLSX + revisao)."""
     start_time = time.time()
     print(f"\n[RELATORIO] Gerando XLSX via IA - arquivo: {req.arquivo_original}")
 
-    # Buscar contexto RAG com query rica
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
@@ -306,7 +309,6 @@ async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks:
             normas_contexto=normas_contexto,
         )
 
-        # Deletar apos envio
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
@@ -320,3 +322,8 @@ async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks:
             status_code=500,
             detail=f"Erro ao gerar relatorio XLSX: {str(e)}",
         )
+
+
+async def gerar_relatorio_xlsx_endpoint(req: RelatorioRequest, background_tasks: BackgroundTasks):
+    """Gera relatorio XLSX via IA e retorna JSON com report (base64) + review."""
+    return await asyncio.to_thread(_gerar_xlsx_sync, req, background_tasks)

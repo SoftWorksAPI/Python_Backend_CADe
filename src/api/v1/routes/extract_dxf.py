@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -80,7 +81,8 @@ router = APIRouter()
 )
 async def ai_health_check():
     try:
-        resposta = chamar_openrouter(
+        resposta = await asyncio.to_thread(
+            chamar_openrouter,
             system_prompt="Responda com uma unica palavra.",
             user_prompt="Diga 'online' se voce esta funcionando.",
         )
@@ -106,7 +108,8 @@ async def extract_dxf_memorial(
 ) -> MemorialResponse:
     content = await _validate_and_read(file)
     try:
-        resultado = executar_analise_dxf(
+        resultado = await asyncio.to_thread(
+            executar_analise_dxf,
             filename=file.filename,
             content=content,
             options=payload,
@@ -140,8 +143,12 @@ async def extract_dxf_raw(
 ) -> RawExtractResponse:
     content = await _validate_and_read(file)
     try:
-        response_data = extract_dxf_from_upload(filename=file.filename, content=content, options=payload)
-        ai_prompt = generate_ai_prompt_string(response_data)
+        def _extrair_raw():
+            response_data = extract_dxf_from_upload(filename=file.filename, content=content, options=payload)
+            ai_prompt = generate_ai_prompt_string(response_data)
+            return response_data, ai_prompt
+
+        response_data, ai_prompt = await asyncio.to_thread(_extrair_raw)
         return RawExtractResponse(arquivo=file.filename, dados=response_data, ai_prompt=ai_prompt)
     except DXFExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
@@ -162,8 +169,12 @@ async def extract_dxf_prompt(
 ) -> AIPromptResponse:
     content = await _validate_and_read(file)
     try:
-        response_data = extract_dxf_from_upload(filename=file.filename, content=content, options=payload)
-        ai_prompt = generate_ai_prompt_string(response_data)
+        def _extrair_prompt():
+            response_data = extract_dxf_from_upload(filename=file.filename, content=content, options=payload)
+            ai_prompt = generate_ai_prompt_string(response_data)
+            return ai_prompt
+
+        ai_prompt = await asyncio.to_thread(_extrair_prompt)
         return AIPromptResponse(arquivo=file.filename, ai_prompt=ai_prompt)
     except DXFExtractionError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

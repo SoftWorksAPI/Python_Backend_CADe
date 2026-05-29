@@ -176,20 +176,20 @@ def _build_json_response(caminho: str, revisao: str, media_type: str) -> JSONRes
 def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de Markdown (RAG + LLM + arquivo + revisao)."""
     start_time = time.time()
-    log.separator("RELATORIO")
-    log.info("RELATORIO", f"Gerando Markdown via IA - arquivo: {req.arquivo_original}")
+    log.separator("MD")
+    log.info("MD", f"Gerando Markdown via IA - arquivo: {req.arquivo_original}")
 
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
-        log.info("RELATORIO", f"RAG: buscando normas (query: {query[:100]})")
+        log.info("MD", f"RAG: buscando normas (query: {query[:100]})")
         normas_contexto = buscar_normas_relevantes(query=query, k=5)
         _log_rag_resultados(normas_contexto)
     except Exception as rag_err:
-        log.warn("RELATORIO", f"RAG indisponivel: {rag_err}")
+        log.warn("MD", f"RAG indisponivel: {rag_err}")
 
     try:
-        log.info("RELATORIO", "Enviando para IA (geracao de MD)...")
+        log.info("MD", "Enviando para IA (geracao de MD)...")
         conteudo = gerar_relatorio_ia(
             tipo="md",
             dados_extracao=req.dados_extracao,
@@ -209,12 +209,12 @@ def _gerar_markdown_sync(req: RelatorioRequest, background_tasks: BackgroundTask
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
-        log.success("RELATORIO", f"Markdown gerado com sucesso em {elapsed:.1f}s: {caminho}")
+        log.success("MD", f"Markdown gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
         return _build_json_response(str(caminho), revisao, "text/markdown")
     except Exception as e:
         elapsed = time.time() - start_time
-        log.error("RELATORIO", f"Erro ao gerar Markdown apos {elapsed:.1f}s: {str(e)}")
+        log.error("MD", f"Erro ao gerar Markdown apos {elapsed:.1f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio Markdown: {str(e)}",
@@ -246,27 +246,27 @@ async def gerar_relatorio_markdown(req: RelatorioRequest, background_tasks: Back
 def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de PDF (RAG + LLM + PDF + revisao)."""
     start_time = time.time()
-    log.separator("RELATORIO")
-    log.info("RELATORIO", f"Gerando PDF via IA - arquivo: {req.arquivo_original}")
+    log.separator("PDF")
+    log.info("PDF", f"Gerando PDF via IA - arquivo: {req.arquivo_original}")
 
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
-        log.info("RELATORIO", f"RAG: buscando normas (query: {query[:100]})")
+        log.info("PDF", f"RAG: buscando normas (query: {query[:100]})")
         normas_contexto = buscar_normas_relevantes(query=query, k=5)
         _log_rag_resultados(normas_contexto)
     except Exception as rag_err:
-        log.warn("RELATORIO", f"RAG indisponivel: {rag_err}")
+        log.warn("PDF", f"RAG indisponivel: {rag_err}")
 
     try:
-        log.info("RELATORIO", "Enviando para IA (geracao de texto para PDF)...")
+        log.info("PDF", "Enviando para IA (geracao de texto para PDF)...")
         texto_ia = gerar_relatorio_ia(
             tipo="pdf",
             dados_extracao=req.dados_extracao,
             memorial_descritivo=req.memorial_descritivo,
             normas_contexto=normas_contexto,
         )
-        log.info("RELATORIO", f"IA retornou {len(texto_ia)} chars, convertendo para PDF...")
+        log.info("PDF", f"IA retornou {len(texto_ia)} chars, convertendo para PDF...")
 
         caminho = gerar_pdf_de_texto(texto_ia, req.arquivo_original)
 
@@ -275,12 +275,12 @@ def _gerar_pdf_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
-        log.success("RELATORIO", f"PDF gerado com sucesso em {elapsed:.1f}s: {caminho}")
+        log.success("PDF", f"PDF gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
         return _build_json_response(caminho, revisao, "application/pdf")
     except Exception as e:
         elapsed = time.time() - start_time
-        log.error("RELATORIO", f"Erro ao gerar PDF apos {elapsed:.1f}s: {str(e)}")
+        log.error("PDF", f"Erro ao gerar PDF apos {elapsed:.1f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio PDF: {str(e)}",
@@ -312,20 +312,20 @@ async def gerar_relatorio_pdf(req: RelatorioRequest, background_tasks: Backgroun
 def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
     """Corpo sync da geracao de XLSX (RAG + LLM + XLSX + revisao)."""
     start_time = time.time()
-    log.separator("RELATORIO")
-    log.info("RELATORIO", f"Gerando XLSX via IA - arquivo: {req.arquivo_original}")
+    log.separator("XLSX")
+    log.info("XLSX", f"Gerando XLSX via IA - arquivo: {req.arquivo_original}")
 
     normas_contexto = ""
     try:
         query = _build_relatorio_rag_query(req.memorial_descritivo, req.dados_extracao)
-        log.info("RELATORIO", f"RAG: buscando normas (query: {query[:100]})")
+        log.info("XLSX", f"RAG: buscando normas (query: {query[:100]})")
         normas_contexto = buscar_normas_relevantes(query=query, k=5)
         _log_rag_resultados(normas_contexto)
     except Exception as rag_err:
-        log.warn("RELATORIO", f"RAG indisponivel: {rag_err}")
+        log.warn("XLSX", f"RAG indisponivel: {rag_err}")
 
     try:
-        log.info("RELATORIO", "Enviando para IA (geracao de XLSX)...")
+        log.info("XLSX", "Enviando para IA (geracao de XLSX)...")
         caminho, revisao = gerar_relatorio_xlsx(
             memorial_descritivo=req.memorial_descritivo,
             dados_extracao=req.dados_extracao,
@@ -336,12 +336,12 @@ def _gerar_xlsx_sync(req: RelatorioRequest, background_tasks: BackgroundTasks):
         background_tasks.add_task(_deletar_arquivo, str(caminho))
 
         elapsed = time.time() - start_time
-        log.success("RELATORIO", f"XLSX gerado com sucesso em {elapsed:.1f}s: {caminho}")
+        log.success("XLSX", f"XLSX gerado com sucesso em {elapsed:.1f}s: {caminho}")
 
         return _build_json_response(caminho, revisao, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         elapsed = time.time() - start_time
-        log.error("RELATORIO", f"Erro ao gerar XLSX apos {elapsed:.1f}s: {str(e)}")
+        log.error("XLSX", f"Erro ao gerar XLSX apos {elapsed:.1f}s: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Erro ao gerar relatorio XLSX: {str(e)}",

@@ -11,10 +11,10 @@ from src.api.v1.services.extract_dxf_service import (
     generate_ai_prompt_string,
 )
 from src.api.v1.services.ai.pipeline import executar_analise_dxf
-from src.api.v1.services.ai.client import chamar_openrouter
+from src.api.v1.services.ai.client import chamar_ia
+from src.api.v1.services.ai.config_fetcher import fetch_ai_config
 from src.api.v1.services.callback import enviar_callback
 from src.api.v1.dependencies import verify_api_key
-from src.config import OPENROUTER_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -81,17 +81,21 @@ router = APIRouter()
     dependencies=[Depends(verify_api_key)],
 )
 async def ai_health_check():
+    config = fetch_ai_config()
+    provider = config.get("provider", "openrouter")
+    model = config.get("model", "desconhecido")
+
     try:
         resposta = await asyncio.to_thread(
-            chamar_openrouter,
+            chamar_ia,
             system_prompt="Responda com uma unica palavra.",
             user_prompt="Diga 'online' se voce esta funcionando.",
         )
-        return {"status": "online", "modelo": OPENROUTER_MODEL, "resposta": resposta.strip()}
+        return {"status": "online", "provider": provider, "modelo": model, "resposta": resposta.strip()}
     except ValueError as exc:
-        return {"status": "erro_config", "modelo": OPENROUTER_MODEL, "resposta": None, "erro": str(exc)}
+        return {"status": "erro_config", "provider": provider, "modelo": model, "resposta": None, "erro": str(exc)}
     except Exception as exc:
-        return {"status": "erro_conexao", "modelo": OPENROUTER_MODEL, "resposta": None, "erro": str(exc)}
+        return {"status": "erro_conexao", "provider": provider, "modelo": model, "resposta": None, "erro": str(exc)}
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,63 @@
+"""
+Rota de chat IA para perguntas sobre projetos processados.
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from src.api.v1.dependencies import verify_api_key
+from src.api.v1.services.ai.chat_service import responder_pergunta_chat
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user" ou "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    pergunta: str
+    json_cru: dict[str, Any]
+    json_tratado: dict[str, Any]
+    historico: list[ChatMessage] | None = None
+    reports: list[dict[str, str]] | None = None
+
+
+class ChatResponse(BaseModel):
+    resposta: str
+    sugestoes: list[str] = []
+    referencias: list[dict[str, Any]] = []
+
+
+router = APIRouter()
+
+
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    summary="Chat sobre projeto e normas tecnicas",
+    description=(
+        "Recebe uma pergunta e os dados do projeto (JSON cru e tratado), "
+        "consulta normas via RAG e reports do projeto, retorna resposta da IA "
+        "com sugestoes de proximas perguntas e referencias consultadas."
+    ),
+    dependencies=[Depends(verify_api_key)],
+)
+async def chat_endpoint(req: ChatRequest) -> ChatResponse:
+    historico_dicts = None
+    if req.historico:
+        historico_dicts = [msg.model_dump() for msg in req.historico]
+
+    resultado = await asyncio.to_thread(
+        responder_pergunta_chat,
+        pergunta=req.pergunta,
+        json_cru=req.json_cru,
+        json_tratado=req.json_tratado,
+        historico=historico_dicts,
+        reports=req.reports,
+    )
+
+    return ChatResponse(**resultado)
